@@ -11,4 +11,6 @@
 - [ ] Définir le comportement des instances lorsque le plan source est modifié, avec prise en charge future des modifications locales.
 
 
-## Extention VS Code pour les fonctions python
+## Editeur de tuile 
+- [ ] Outil comme paint pour créer des textures à importer directement dans le moteur 
+- [ ] On pourrait faire plusieurs tuiles d'un coup qui serait exportées une par une

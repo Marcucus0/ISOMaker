@@ -48,4 +48,12 @@ desktop.ini
 *.swo
 *~
 
+# =========================
+# PROJETS
+# =========================
+
 /projects/
+/assets/imported/
+/project/
+/project/test2/
+projects/test2/project/assets/lézard.jpg
