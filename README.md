@@ -10,7 +10,7 @@ ISOMaker est un éditeur et moteur de jeu 2D isométrique écrit en Rust. Il per
 **Version actuelle :** `0.1.0`  
 **Dernière release :** `0.1.0` · 2026-10-29 ([changelog](CHANGELOG.md); sans tag Git)  
 **Commits du dépôt :** 6  
-**Dernier commit :** `52a4dbc (2026-10-29)`  
+**Dernier commit :** `d8eb979 (2026-10-29)`  
 **Code et documentation :** 34 fichiers Rust · 8 804 lignes Rust · 4 fichiers Python · 5 documents Markdown
 
 _Mis à jour le 2026-10-29._
