@@ -20,18 +20,42 @@ complet prêt au déploiement.
 - **Projets et scènes** : un projet contient un monde, un monde contient
   plusieurs scènes. Le format `.isomaker` sérialise le projet complet et les
   dialogues Windows servent à ouvrir, enregistrer et enregistrer sous.
-- **Assets par projet** : les textures sont copiées dans le dossier `assets/`
-  propre au projet et le script du monde dans son dossier `scripts/`. Le projet
-  sérialise leurs chemins relatifs.
+- **Fichiers du projet** : le panneau Assets sert de mini gestionnaire enraciné
+  dans le dossier `<nom_du_projet>/` associé au fichier `.isomaker`. Il permet
+  de naviguer dans les dossiers, d'ouvrir les fichiers avec l'application
+  Windows associée, de créer des fichiers/dossiers et de renommer les éléments.
+  Les renommages actualisent les références aux textures et scripts dans le
+  projet, puis le sauvegardent.
 - **Vue isométrique** : grille par défaut de 64 × 32 pixels par tuile,
   coordonnées logiques, caméra avec zoom centré sous le curseur, déplacement et
   affichage allégé à faible zoom. Un compteur FPS lissé s'affiche dans le
   viewport pendant Lecture.
 - **Outils de tuiles** : peinture, gomme, sélection, déplacement, rotation,
-  remplissage de la sélection, annulation et rétablissement. En Lecture et en
+  remplissage de zones contiguës ou de la sélection, annulation et
+  rétablissement. En Lecture et en
   Pause, les commandes d'édition sont bloquées pour laisser le clavier au jeu.
+- **Copier/coller de tuiles** : avec l'outil Sélection, `Ctrl+C` copie la tuile
+  seule sélectionnée et `Ctrl+V` la colle sur la tuile sélectionnée.
+- **Historique** : `Ctrl+Z` annule et `Ctrl+Y` rétablit la dernière modification
+  de la scène.
+- **Confirmation de suppression** : une boîte de dialogue confirme la suppression
+  d'objets depuis la scène ou la liste d'objets. `Entrée` confirme et `Échap`
+  annule.
+- **Logs Python** : les messages normaux, avertissements et erreurs indiquent
+  le fichier script d'origine et le nom de l'objet si le script y est attaché.
+- **Projets récents** : le menu **Fichier → Projets récents** permet de rouvrir
+  les dix derniers projets ouverts ou enregistrés. La liste est persistante.
 - **Raccourcis de simulation** : `F9` lance/reprend, `F10` arrête et `F11` met
   en pause.
+- **Caméras** : ajout de caméras de scène avec position, zoom et choix d'une
+  caméra principale. Leur inspecteur propose un réglage pour activer le lissage
+  et un curseur de vitesse. En Lecture et Pause, le viewport peut suivre une
+  caméra choisie avec interpolation fluide de position et de zoom, ou afficher
+  la vue libre de l'éditeur.
+- **Paramètres de l'éditeur** : le menu **Fichier** ouvre les préférences
+  globales sauvegardées dans le dossier de configuration utilisateur. La
+  grille peut être masquée pendant Lecture et Pause, et sa couleur est
+  configurable.
 - **Sélection d'objets** : sélection rectangulaire avec `Shift`, surlignage,
   déplacement temporaire avec aperçu et suppression. Les modules et prefabs du
   panneau Bâtiments peuvent être glissés dans la scène.
@@ -39,7 +63,11 @@ complet prêt au déploiement.
   propriété `Masqué` (false par défaut), texture vide par défaut, sélecteur de
   fichiers Windows, affichage des textures et option d'ajustement au losange
   activée par défaut. Chaque objet peut aussi choisir ou créer son script
-  Python avec les hooks `_on_game_launch` et `_on_update`.
+  Python avec les hooks `_on_game_launch` et `_on_update`. L'inspecteur regroupe
+  les réglages en catégories repliables : identité, transformation, apparence,
+  physique, script et propriétés personnalisées. Les outils de la barre
+  supérieure utilisent des icônes vectorielles dessinées par l'interface, avec
+  leurs libellés conservés.
 - **Modèle de bâtiments** : modules et prefabs peuvent être instanciés. La
   maison intégrée existe comme exemple ; ses textures se choisissent dans les
   propriétés plutôt que d'être assignées automatiquement.
@@ -53,8 +81,9 @@ complet prêt au déploiement.
   Les scripts du monde et des objets peuvent interroger les touches maintenues,
   pressées ou relâchées pendant Lecture avec les constantes `game.keys`.
   Les scripts attachés aux objets peuvent aussi lire leurs coordonnées courantes
-  et les champs de l'inspecteur, puis modifier les champs éditables avec
-  `set_self_property`.
+  et les champs de l'inspecteur, retrouver un autre objet avec
+  `game.get_object(uuid)` ou `game.find_object(nom)`, puis modifier les champs
+  éditables avec `set_self_property` ou `game.set_property`.
   Les scripts générés sont annotés pour l'autocomplétion VS Code/Pylance à l'aide
   du stub `python/engine_api/__init__.pyi`.
   Lecture est bloquée si le monde n'a pas de script défini ou si son fichier
@@ -66,11 +95,14 @@ complet prêt au déploiement.
 
 - L'éditeur de plans réutilisables de bâtiments n'existe pas encore. Son
   périmètre est listé dans [`todo list.md`](../todo%20list.md).
-- La grille et ses couleurs sont des réglages de vue non enregistrés. Les
-  dimensions de tuile existent dans les métadonnées de scène, sans UI dédiée.
+- La couleur de la grille est une préférence globale sauvegardée dans les
+  paramètres de l'éditeur. L'option d'affichage de la grille en Lecture/Pause
+  n'est pas persistée. Les dimensions de tuile existent dans les métadonnées de
+  scène, sans UI dédiée.
 - La boucle de scripts est liée à Lecture dans l'éditeur, mais l'exécution
   autonome d'un jeu publié n'est pas encore implémentée.
-- L'API Python n'expose pas encore l'état du monde, les entrées souris ou les
+- L'API Python expose les objets de scène sous forme d'instantanés en lecture
+  seule, mais pas encore l'état global du monde, les entrées souris ou les
   événements ; le débogage interactif et les permissions de scripts tiers
   restent à concevoir.
 - Les collisions sont une propriété des objets ; la simulation physique et la
@@ -95,15 +127,14 @@ complet prêt au déploiement.
 
 L'ordre peut changer selon les besoins exprimés pendant le développement.
 
-## Verification
+## Vérification
 
-Les tests Python (`python -m unittest discover -s python/tests -v`) passent :
-3 tests reussis. Les tests Rust de `scripting`, les tests d'integration cibles
-de `editor` et les tests des autres crates passent : 17 tests reussis.
-`cargo check --workspace` passe egalement. Le lancement complet de
-`cargo test --workspace` a ete bloque par Windows, qui n'a pas pu remplacer
-`target/debug/editor.exe` pendant qu'il etait verrouille ; fermer l'editeur
-avant de relancer cette commande.
+Pour la préparation de release du 29 octobre 2026 :
+
+- `cargo check --workspace` : réussi, sans avertissement.
+- `cargo build --release -p editor` : réussi.
+- `cargo test --workspace` : 24 tests réussis.
+- `python -m unittest discover -s python/tests -v` : 5 tests réussis.
 
 ## Lancer l'éditeur
 

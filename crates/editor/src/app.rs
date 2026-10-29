@@ -8,6 +8,7 @@
 use egui::Context;
 use engine::game_loop::{EngineMode, GameLoop};
 use engine::InputState;
+use serde::{Deserialize, Serialize};
 use scripting::{ScriptRuntime, GameCommand};
 use std::collections::VecDeque;
 use world::{
@@ -112,7 +113,8 @@ impl EditorState {
                 Ok(cmds) => self.apply_commands(cmds),
                 Err(e) => self.push_log(log::Level::Error, format!("on_start : {e}")),
             }
-            match self.script_runtime.call_world_launch() {
+            let objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
+            match self.script_runtime.call_world_launch(&objects) {
                 Ok(cmds) => self.apply_commands(cmds),
                 Err(e) => self.push_log(log::Level::Error, format!("_on_game_launch : {e}")),
             }
@@ -165,7 +167,8 @@ impl EditorState {
             Ok(cmds) => self.apply_commands(cmds),
             Err(e) => self.push_log(log::Level::Error, format!("on_update : {e}")),
         }
-        match self.script_runtime.call_world_update(delta_time, &self.input) {
+        let objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
+        match self.script_runtime.call_world_update(delta_time, &self.input, &objects) {
             Ok(cmds) => self.apply_commands(cmds),
             Err(e) => self.push_log(log::Level::Error, format!("_on_update : {e}")),
         }
@@ -222,14 +225,14 @@ impl EditorState {
                         format!("SetGlobal: {} = {:?}", key, value),
                     );
                 }
-                GameCommand::Log { level, message } => {
+                GameCommand::Log { source, level, message } => {
                     let lvl = match level {
                         scripting::command::LogLevel::Debug   => log::Level::Debug,
                         scripting::command::LogLevel::Info    => log::Level::Info,
                         scripting::command::LogLevel::Warning => log::Level::Warn,
                         scripting::command::LogLevel::Error   => log::Level::Error,
                     };
-                    self.push_script_log(lvl, message);
+                    self.push_script_log(lvl, &source, message);
                 }
                 GameCommand::Quit => { self.stop(); }
             }
@@ -241,13 +244,14 @@ impl EditorState {
         self.store_log(level, msg);
     }
 
-    fn push_script_log(&mut self, level: log::Level, msg: String) {
+    fn push_script_log(&mut self, level: log::Level, source: &str, msg: String) {
+        let formatted = format!("[{source}] {msg}");
         // Les messages d'information restent dans le panneau egui ; les
         // recopier au logger natif provoquerait des écritures console par frame.
         if matches!(level, log::Level::Warn | log::Level::Error) {
-            log::log!(level, "[Script] {}", msg);
+            log::log!(level, "[Script] {}", formatted);
         }
-        self.store_log(level, msg);
+        self.store_log(level, formatted);
     }
 
     fn store_log(&mut self, level: log::Level, msg: String) {
@@ -340,6 +344,26 @@ fn apply_script_object_property(
             object.tile_pos.z = value.as_i64().and_then(|v| i32::try_from(v).ok()).ok_or("attend un entier")?;
             Ok(())
         }
+        "camera_zoom" => {
+            let zoom = value.as_f64().ok_or("attend un nombre")? as f32;
+            if !zoom.is_finite() || !(0.1..=10.0).contains(&zoom) {
+                return Err("camera_zoom doit être compris entre 0.1 et 10.0".to_owned());
+            }
+            object.camera_zoom = zoom;
+            Ok(())
+        }
+        "camera_interpolation" => {
+            object.camera_interpolation = value.as_bool().ok_or("attend True ou False")?;
+            Ok(())
+        }
+        "camera_interpolation_speed" => {
+            let speed = value.as_f64().ok_or("attend un nombre")? as f32;
+            if !speed.is_finite() || !(0.1..=20.0).contains(&speed) {
+                return Err("camera_interpolation_speed doit être compris entre 0.1 et 20.0".to_owned());
+            }
+            object.camera_interpolation_speed = speed;
+            Ok(())
+        }
         "has_collisions" => {
             object.has_collisions = value.as_bool().ok_or("attend True ou False")?;
             Ok(())
@@ -418,21 +442,59 @@ pub struct EditorApp {
     scene_view: SceneView,
     show_log: bool,
     show_world_settings: bool,
+    show_editor_settings: bool,
+    editor_settings: EditorSettings,
     fps_estimate: f32,
+    runtime_camera: Option<ObjectId>,
+    runtime_camera_position: Option<egui::Vec2>,
+    runtime_camera_zoom: Option<f32>,
+    pending_deletion: Option<(Vec<ObjectId>, Vec<TilePos>)>,
     /// Chemin du projet courant pour la sauvegarde.
     project_path: Option<std::path::PathBuf>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct EditorSettings {
+    hide_grid_during_play: bool,
+    recent_projects: Vec<String>,
+    grid_color: [u8; 4],
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self {
+            hide_grid_during_play: false,
+            recent_projects: Vec::new(),
+            grid_color: [180, 200, 220, 80],
+        }
+    }
+}
+
 impl EditorApp {
     pub fn new() -> Self {
+        let editor_settings = load_editor_settings();
+        let mut scene_view = SceneView::new();
+        scene_view.options.grid_color = egui::Color32::from_rgba_unmultiplied(
+            editor_settings.grid_color[0],
+            editor_settings.grid_color[1],
+            editor_settings.grid_color[2],
+            editor_settings.grid_color[3],
+        );
         Self {
             state: EditorState::new(),
             toolbar: Toolbar::new(),
             left_panel: LeftPanel::new(),
-            scene_view: SceneView::new(),
+            scene_view,
             show_log: true,
             show_world_settings: false,
+            show_editor_settings: false,
+            editor_settings,
             fps_estimate: 0.0,
+            runtime_camera: None,
+            runtime_camera_position: None,
+            runtime_camera_zoom: None,
+            pending_deletion: None,
             project_path: None,
         }
     }
@@ -455,17 +517,48 @@ impl EditorApp {
         // Synchronise le type de tuile depuis la palette.
         self.scene_view.paint_tile_type = self.left_panel.selected_tile_type;
 
-        self.draw_ui(ctx);
+        self.draw_ui(ctx, delta_time);
 
         // Récupère la sélection de la vue scène.
         self.state.selected = self.scene_view.selected_object;
     }
 
-    fn draw_ui(&mut self, ctx: &Context) {
+    /// Capture Ctrl+C/Ctrl+V avant qu'egui-winit les traite comme des raccourcis
+    /// du presse-papiers texte.
+    pub fn queue_tile_clipboard_shortcut(&mut self, copy: bool) -> bool {
+        if !self.state.game_loop.is_editor()
+            || self.toolbar.active_tool != crate::toolbar::EditorTool::Select
+        {
+            return false;
+        }
+        self.scene_view.request_tile_clipboard_shortcut(copy);
+        true
+    }
+
+    fn draw_ui(&mut self, ctx: &Context, delta_time: f32) {
         let scene_before_ui = self.state.game_loop.is_editor()
             .then(|| self.state.active_scene().to_json().ok())
             .flatten();
         let mut history_action = false;
+        if self.state.game_loop.is_editor() && !ctx.wants_keyboard_input() {
+            let history_shortcut = ctx.input(|input| {
+                if !input.modifiers.ctrl || input.modifiers.alt || input.modifiers.mac_cmd {
+                    return None;
+                }
+                if input.key_pressed(egui::Key::Z) {
+                    Some(false)
+                } else if input.key_pressed(egui::Key::Y) {
+                    Some(true)
+                } else {
+                    None
+                }
+            });
+            if let Some(redo) = history_shortcut {
+                if redo { self.state.redo(); }
+                else { self.state.undo(); }
+                history_action = true;
+            }
+        }
         if self.state.game_loop.is_editor() && !ctx.wants_keyboard_input() {
             let tool_shortcut = ctx.input(|input| {
                 if input.modifiers.ctrl || input.modifiers.alt || input.modifiers.mac_cmd {
@@ -490,6 +583,9 @@ impl EditorApp {
         let scene_names: Vec<String> = self.state.project.world.scenes.iter()
             .map(|scene| scene.meta.name.clone())
             .collect();
+        let recent_projects: Vec<std::path::PathBuf> = self.editor_settings.recent_projects.iter()
+            .map(std::path::PathBuf::from)
+            .collect();
         let active_scene_index = self.state.project.world.active_scene_index;
         // ── Barre d'outils ────────────────────────────────────────────────────
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -500,6 +596,7 @@ impl EditorApp {
                 &mut self.state.game_loop,
                 &scene_names,
                 active_scene_index,
+                &recent_projects,
             );
             if self.toolbar.undo_requested && self.state.game_loop.mode == EngineMode::Editor {
                 self.state.undo();
@@ -535,6 +632,9 @@ impl EditorApp {
                                 Ok(()) => {
                                     self.load_object_scripts();
                                     self.show_world_settings = false;
+                                    self.runtime_camera = self.state.active_scene().main_camera;
+                                    self.runtime_camera_position = None;
+                                    self.runtime_camera_zoom = None;
                                     self.state.play();
                                 }
                                 Err(error) => {
@@ -549,13 +649,51 @@ impl EditorApp {
                         }
                     }
                     EngineMode::Paused  => { /* déjà appliqué */ }
-                    EngineMode::Editor  => { self.state.stop(); }
+                    EngineMode::Editor  => {
+                        self.state.stop();
+                        self.runtime_camera = None;
+                        self.runtime_camera_position = None;
+                        self.runtime_camera_zoom = None;
+                    }
                 }
             }
         });
 
         if self.toolbar.world_settings_requested {
             self.show_world_settings = true;
+        }
+
+        if self.toolbar.editor_settings_requested {
+            self.show_editor_settings = true;
+        }
+        if self.show_editor_settings {
+            let mut settings_changed = false;
+            egui::Window::new("Paramètres de l'éditeur")
+                .open(&mut self.show_editor_settings)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new("Affichage du viewport").strong());
+                    settings_changed |= ui.checkbox(
+                        &mut self.editor_settings.hide_grid_during_play,
+                        "Masquer la grille pendant la lecture",
+                    ).changed();
+                    ui.horizontal(|ui| {
+                        ui.label("Couleur de la grille");
+                        if ui.color_edit_button_srgba(&mut self.scene_view.options.grid_color).changed() {
+                            self.editor_settings.grid_color = self.scene_view.options.grid_color.to_array();
+                            settings_changed = true;
+                        }
+                    });
+                    ui.label(egui::RichText::new(
+                        "La grille reste visible en mode édition et est masquée pendant Lecture et Pause.",
+                    ).small().color(egui::Color32::GRAY));
+                });
+            if settings_changed {
+                if let Err(error) = self.save_editor_settings() {
+                    self.state.push_log(log::Level::Error,
+                        format!("Enregistrement des paramètres de l'éditeur : {error}"));
+                }
+            }
         }
 
         if self.show_world_settings {
@@ -630,6 +768,15 @@ impl EditorApp {
                 Err(error) => self.state.push_log(log::Level::Error, format!("Dialogue Ouvrir : {error}")),
             }
         }
+        if let Some(path) = self.toolbar.recent_project_requested.clone() {
+            if self.state.game_loop.mode == EngineMode::Editor {
+                match self.load_scene(&path) {
+                    Ok(()) => history_action = true,
+                    Err(error) => self.state.push_log(log::Level::Error,
+                        format!("Ouverture du projet récent : {error}")),
+                }
+            }
+        }
         if (self.toolbar.save_requested || self.toolbar.save_as_requested || save_shortcut)
             && self.state.game_loop.mode == EngineMode::Editor
         {
@@ -677,8 +824,6 @@ impl EditorApp {
                 ui.label(format!("Zoom : {:.1}×", self.scene_view.camera.zoom));
                 ui.separator();
                 ui.checkbox(&mut self.scene_view.options.show_grid, "Grille");
-                ui.color_edit_button_srgba(&mut self.scene_view.options.grid_color)
-                    .on_hover_text("Couleur de la grille");
 
                 // Toggle log.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -725,6 +870,11 @@ impl EditorApp {
 
         // ── Panneau gauche ────────────────────────────────────────────────────
         let editing_enabled = self.state.game_loop.is_editor();
+        let project_root = self.project_path.as_deref()
+            .and_then(|path| project_browser_directory(path).ok())
+            .and_then(|path| path.canonicalize().ok());
+        let active_project_file = self.project_path.as_deref()
+            .and_then(|path| path.canonicalize().ok());
         egui::SidePanel::left("left_panel")
             .resizable(true)
             .default_width(220.0)
@@ -735,6 +885,8 @@ impl EditorApp {
                     ui,
                     self.state.project.world.active_scene_mut(),
                     &mut self.state.selected,
+                    project_root.as_deref(),
+                    active_project_file.as_deref(),
                 );
                 if self.state.selected != selection_before_panel {
                     self.scene_view.selected_object = self.state.selected;
@@ -742,6 +894,29 @@ impl EditorApp {
                     self.scene_view.selected_tiles.clear();
                 }
                 match action {
+                    PanelAction::OpenFile(path) => {
+                        if let Err(error) = open_file_with_default_app(&path) {
+                            self.state.push_log(log::Level::Error, format!("Ouverture du fichier : {error}"));
+                        }
+                    }
+                    PanelAction::CreateFile(path) => {
+                        if let Err(error) = self.create_project_file(&path) {
+                            self.state.push_log(log::Level::Error, format!("Création du fichier : {error}"));
+                        }
+                    }
+                    PanelAction::CreateDirectory(path) => {
+                        if let Err(error) = self.create_project_directory(&path) {
+                            self.state.push_log(log::Level::Error, format!("Création du dossier : {error}"));
+                        }
+                    }
+                    PanelAction::RenamePath(old, new) => {
+                        if let Err(error) = self.rename_project_path(&old, &new) {
+                            self.state.push_log(log::Level::Error, format!("Renommage : {error}"));
+                        }
+                    }
+                    PanelAction::DeleteObject(id) => {
+                        self.pending_deletion = Some((vec![id], Vec::new()));
+                    }
                     PanelAction::AddObject => {
                         let id = self.state.active_scene_mut().spawn(
                             "Nouvel objet",
@@ -749,6 +924,16 @@ impl EditorApp {
                             TilePos::new(0, 0),
                         );
                         self.state.selected = Some(id);
+                    }
+                    PanelAction::AddCamera => {
+                        let camera = world::SceneObject::new(
+                            "Caméra",
+                            world::ObjectType::Camera,
+                            TilePos::new(0, 0),
+                        );
+                        let id = self.state.active_scene_mut().add_object(camera);
+                        self.state.selected = Some(id);
+                        self.scene_view.selected_object = Some(id);
                     }
                     PanelAction::AddModule(kind) => {
                         let mut obj = world::SceneObject::new(
@@ -783,9 +968,13 @@ impl EditorApp {
         egui::SidePanel::right("inspector_panel")
             .resizable(true)
             .default_width(240.0)
+            .width_range(48.0..=f32::INFINITY)
             .show(ctx, |ui| {
                 ui.add_enabled_ui(editing_enabled, |ui| {
-                  egui::ScrollArea::vertical().show(ui, |ui| {
+                  ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                  egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
                     let selected = self.state.selected;
                     let mut request_texture_picker = false;
                     let mut request_script_picker = false;
@@ -874,6 +1063,42 @@ impl EditorApp {
             .unwrap_or_default();
         let fps_overlay = (self.state.game_loop.mode == EngineMode::Playing)
             .then_some(self.fps_estimate);
+        let grid_visible = self.scene_view.options.show_grid
+            && (self.state.game_loop.mode == EngineMode::Editor
+                || !self.editor_settings.hide_grid_during_play);
+        let editor_camera = self.scene_view.camera.clone();
+        if !editing_enabled {
+            let camera_pose = self.runtime_camera.and_then(|id| {
+                self.state.active_scene().get_object(id)
+                    .filter(|object| object.object_type == ObjectType::Camera)
+                    .map(|object| (
+                        object.tile_pos,
+                        object.camera_zoom,
+                        object.camera_interpolation,
+                        object.camera_interpolation_speed,
+                    ))
+            });
+            if let Some((tile_pos, zoom, interpolation, interpolation_speed)) = camera_pose {
+                let position = self.state.active_scene().projection().tile_to_screen(tile_pos);
+                let target_position = egui::vec2(position.x, position.y);
+                let target_zoom = zoom.clamp(0.1, 10.0);
+                let blend = if interpolation {
+                    1.0 - (-interpolation_speed.clamp(0.1, 20.0) * delta_time.max(0.0)).exp()
+                } else {
+                    1.0
+                };
+                let camera_position = self.runtime_camera_position.get_or_insert(target_position);
+                *camera_position += (target_position - *camera_position) * blend;
+                let camera_zoom = self.runtime_camera_zoom.get_or_insert(target_zoom);
+                *camera_zoom += (target_zoom - *camera_zoom) * blend;
+                self.scene_view.camera.position = *camera_position;
+                self.scene_view.camera.zoom = *camera_zoom;
+            } else {
+                self.runtime_camera = None;
+                self.runtime_camera_position = None;
+                self.runtime_camera_zoom = None;
+            }
+        }
         egui::CentralPanel::default().show(ctx, |ui| {
             self.scene_view.show(
                 ui,
@@ -882,8 +1107,66 @@ impl EditorApp {
                 &asset_root,
                 fps_overlay,
                 editing_enabled,
+                grid_visible,
+                &mut self.runtime_camera,
             );
         });
+        if self.pending_deletion.is_none() {
+            if let Some(request) = self.scene_view.take_delete_request() {
+                self.pending_deletion = Some(request);
+            }
+        } else {
+            let _ = self.scene_view.take_delete_request();
+        }
+        let mut confirm_deletion = false;
+        let mut cancel_deletion = false;
+        if let Some((object_ids, tiles)) = &self.pending_deletion {
+            egui::Window::new("Confirmer la suppression")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                        cancel_deletion = true;
+                    }
+                    if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                        confirm_deletion = true;
+                    }
+                    if object_ids.len() == 1 {
+                        let name = self.state.active_scene().get_object(object_ids[0])
+                            .map(|object| object.name.as_str()).unwrap_or("cet objet");
+                        ui.label(format!("Supprimer l'objet « {name} » de la scène ?"));
+                    } else {
+                        ui.label(format!("Supprimer ces {} objets de la scène ?", object_ids.len()));
+                    }
+                    if !tiles.is_empty() {
+                        ui.label(format!("{} tuiles sélectionnées seront également supprimées.", tiles.len()));
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Annuler").clicked() { cancel_deletion = true; }
+                        if ui.button("Supprimer").clicked() { confirm_deletion = true; }
+                    });
+                });
+        }
+        if cancel_deletion {
+            self.pending_deletion = None;
+        } else if confirm_deletion {
+            if let Some((object_ids, tiles)) = self.pending_deletion.take() {
+                for id in object_ids {
+                    self.state.active_scene_mut().remove_object(id);
+                    self.scene_view.selected_objects.remove(&id);
+                    if self.state.selected == Some(id) { self.state.selected = None; }
+                    if self.scene_view.selected_object == Some(id) { self.scene_view.selected_object = None; }
+                }
+                for tile in &tiles {
+                    self.state.active_scene_mut().clear_tile(*tile);
+                    self.scene_view.selected_tiles.remove(tile);
+                }
+            }
+        }
+        if !editing_enabled {
+            self.scene_view.camera = editor_camera;
+        }
 
         if !history_action && self.state.game_loop.mode == EngineMode::Editor {
             if let (Some(before), Ok(after)) = (scene_before_ui, self.state.active_scene().to_json()) {
@@ -1022,7 +1305,101 @@ impl EditorApp {
         let json = self.state.project.to_json()?;
         std::fs::write(&path, &json)?;
         self.project_path = Some(path.clone());
+        self.remember_recent_project(&path);
         self.state.push_log(log::Level::Info, format!("Projet sauvegardé : {}", path.display()));
+        Ok(())
+    }
+
+    fn save_editor_settings(&self) -> anyhow::Result<()> {
+        let path = editor_settings_path()?;
+        let parent = path.parent().ok_or_else(|| anyhow::anyhow!("Dossier de configuration introuvable"))?;
+        std::fs::create_dir_all(parent)?;
+        std::fs::write(path, serde_json::to_vec_pretty(&self.editor_settings)?)?;
+        Ok(())
+    }
+
+    fn create_project_file(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        validate_project_entry_name(path.file_name().and_then(|name| name.to_str()))?;
+        let path = resolve_project_browser_path(self.project_path.as_deref(), path)?;
+        let current = self.left_panel.current_browser_directory()
+            .ok_or_else(|| anyhow::anyhow!("Dossier courant introuvable"))?.canonicalize()?;
+        anyhow::ensure!(path.parent() == Some(current.as_path()), "Le fichier doit être créé dans le dossier affiché");
+        anyhow::ensure!(!path.exists(), "Un élément portant ce nom existe déjà");
+        std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        self.left_panel.refresh_file_browser();
+        Ok(())
+    }
+
+    fn create_project_directory(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
+        validate_project_entry_name(path.file_name().and_then(|name| name.to_str()))?;
+        let path = resolve_project_browser_path(self.project_path.as_deref(), path)?;
+        let current = self.left_panel.current_browser_directory()
+            .ok_or_else(|| anyhow::anyhow!("Dossier courant introuvable"))?.canonicalize()?;
+        anyhow::ensure!(path.parent() == Some(current.as_path()), "Le dossier doit être créé dans le dossier affiché");
+        anyhow::ensure!(!path.exists(), "Un élément portant ce nom existe déjà");
+        std::fs::create_dir(&path)?;
+        self.left_panel.refresh_file_browser();
+        Ok(())
+    }
+
+    fn rename_project_path(&mut self, old: &std::path::Path, new: &std::path::Path) -> anyhow::Result<()> {
+        validate_project_entry_name(new.file_name().and_then(|name| name.to_str()))?;
+        let root = self.project_path.as_deref()
+            .and_then(std::path::Path::parent)
+            .ok_or_else(|| anyhow::anyhow!("Aucun projet n'est ouvert"))?
+            .canonicalize()?;
+        let old = resolve_project_browser_path(self.project_path.as_deref(), old)?;
+        let new = resolve_project_browser_path(self.project_path.as_deref(), new)?;
+        anyhow::ensure!(old != root, "Impossible de renommer la racine du projet");
+        anyhow::ensure!(new.parent() == old.parent(), "Le renommage doit rester dans le dossier d'origine");
+        anyhow::ensure!(!new.exists(), "Un élément portant ce nom existe déjà");
+
+        let mut texture_updates = Vec::new();
+        let mut script_updates = Vec::new();
+        for (scene_index, scene) in self.state.project.world.scenes.iter().enumerate() {
+            for object in scene.objects.values() {
+                let asset_path = object.asset_path.as_deref()
+                    .and_then(|path| remap_project_reference(path, &root, &old, &new));
+                let texture_property = object.properties.get("texture")
+                    .and_then(world::object::PropValue::as_str)
+                    .and_then(|path| remap_project_reference(path, &root, &old, &new));
+                let script = object.script.as_deref()
+                    .and_then(|path| remap_project_reference(path, &root, &old, &new));
+                if asset_path.is_some() || texture_property.is_some() {
+                    texture_updates.push((scene_index, object.id, asset_path, texture_property));
+                }
+                if let Some(script) = script {
+                    script_updates.push((scene_index, object.id, script));
+                }
+            }
+        }
+        let world_script = self.state.project.world.script.as_deref()
+            .and_then(|path| remap_project_reference(path, &root, &old, &new));
+
+        std::fs::rename(&old, &new)?;
+        for (scene_index, object_id, asset_path, texture) in texture_updates {
+            if let Some(object) = self.state.project.world.scenes[scene_index].get_object_mut(object_id) {
+                if let Some(path) = asset_path { object.asset_path = Some(path); }
+                if let Some(path) = texture {
+                    object.properties.insert("texture".to_owned(), world::object::PropValue::Str(path));
+                }
+            }
+        }
+        for (scene_index, object_id, script) in script_updates {
+            if let Some(object) = self.state.project.world.scenes[scene_index].get_object_mut(object_id) {
+                object.script = Some(script);
+            }
+        }
+        if let Some(script) = world_script {
+            self.state.project.world.script = Some(script);
+        }
+        self.left_panel.refresh_file_browser();
+        if let Some(project_file) = self.project_path.clone() {
+            let json = self.state.project.to_json()?;
+            std::fs::write(&project_file, json)?;
+            self.state.push_log(log::Level::Info,
+                format!("Références mises à jour après renommage : {}", project_file.display()));
+        }
         Ok(())
     }
 
@@ -1142,8 +1519,28 @@ impl EditorApp {
         self.state.undo_history.clear();
         self.state.redo_history.clear();
         self.project_path = Some(path.to_owned());
+        self.remember_recent_project(path);
         self.state.push_log(log::Level::Info, format!("Projet chargé : {}", path.display()));
         Ok(())
+    }
+
+    fn remember_recent_project(&mut self, path: &std::path::Path) {
+        let path = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            match std::env::current_dir() {
+                Ok(directory) => directory.join(path),
+                Err(_) => path.to_owned(),
+            }
+        };
+        let path = path.to_string_lossy().into_owned();
+        self.editor_settings.recent_projects.retain(|recent| recent != &path);
+        self.editor_settings.recent_projects.insert(0, path);
+        self.editor_settings.recent_projects.truncate(10);
+        if let Err(error) = self.save_editor_settings() {
+            self.state.push_log(log::Level::Warn,
+                format!("Enregistrement des projets récents : {error}"));
+        }
     }
 
     /// Charge un script Python dans le runtime.
@@ -1226,12 +1623,142 @@ fn ensure_world_script_entrypoints(path: &std::path::Path) -> anyhow::Result<()>
     Ok(())
 }
 
+fn editor_settings_path() -> anyhow::Result<std::path::PathBuf> {
+    #[cfg(target_os = "windows")]
+    let config_root = std::env::var_os("APPDATA")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(|path| {
+            std::path::PathBuf::from(path).join("AppData").join("Roaming")
+        }));
+    #[cfg(not(target_os = "windows"))]
+    let config_root = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|path| {
+            std::path::PathBuf::from(path).join(".config")
+        }));
+
+    let config_root = config_root.ok_or_else(|| anyhow::anyhow!("Dossier de configuration utilisateur introuvable"))?;
+    Ok(config_root.join("MoteurDeJeu").join("editor_settings.json"))
+}
+
+fn load_editor_settings() -> EditorSettings {
+    let path = match editor_settings_path() {
+        Ok(path) => path,
+        Err(error) => {
+            log::warn!("Chargement des paramètres de l'éditeur : {error}");
+            return EditorSettings::default();
+        }
+    };
+    match std::fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|error| {
+            log::warn!("Fichier de paramètres invalide, valeurs par défaut utilisées : {error}");
+            EditorSettings::default()
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => EditorSettings::default(),
+        Err(error) => {
+            log::warn!("Lecture des paramètres de l'éditeur impossible : {error}");
+            EditorSettings::default()
+        }
+    }
+}
+
+fn validate_project_entry_name(name: Option<&str>) -> anyhow::Result<()> {
+    let name = name.ok_or_else(|| anyhow::anyhow!("Nom de fichier invalide"))?;
+    anyhow::ensure!(
+        !name.is_empty()
+            && name != "."
+            && name != ".."
+            && !name.chars().any(|character| matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+            && !name.ends_with(' ')
+            && !name.ends_with('.'),
+        "Nom invalide ou séparateurs interdits"
+    );
+    Ok(())
+}
+
+fn resolve_project_browser_path(
+    project_file: Option<&std::path::Path>,
+    requested: &std::path::Path,
+) -> anyhow::Result<std::path::PathBuf> {
+    let root = project_browser_directory(
+        project_file.ok_or_else(|| anyhow::anyhow!("Aucun projet n'est ouvert"))?,
+    )?.canonicalize()?;
+    let requested = if requested.is_absolute() { requested.to_path_buf() } else { root.join(requested) };
+    let resolved = if requested.exists() {
+        requested.canonicalize()?
+    } else {
+        let parent = requested.parent().ok_or_else(|| anyhow::anyhow!("Chemin de destination invalide"))?
+            .canonicalize()?;
+        parent.join(requested.file_name().ok_or_else(|| anyhow::anyhow!("Nom de fichier invalide"))?)
+    };
+    anyhow::ensure!(resolved.starts_with(&root), "Le gestionnaire ne peut agir qu'à l'intérieur du dossier du projet");
+    Ok(resolved)
+}
+
+fn remap_project_reference(
+    stored: &str,
+    root: &std::path::Path,
+    old: &std::path::Path,
+    new: &std::path::Path,
+) -> Option<String> {
+    let stored_path = std::path::Path::new(stored);
+    let was_absolute = stored_path.is_absolute();
+    let resolved = if was_absolute { stored_path.to_path_buf() } else { root.join(stored_path) }
+        .canonicalize().ok()?;
+    let suffix = resolved.strip_prefix(old).ok()?;
+    let remapped = new.join(suffix);
+    let stored_remapped = if was_absolute { remapped } else { remapped.strip_prefix(root).ok()?.to_path_buf() };
+    Some(stored_remapped.to_string_lossy().replace('\\', "/"))
+}
+
+#[cfg(target_os = "windows")]
+fn open_file_with_default_app(path: &std::path::Path) -> anyhow::Result<()> {
+    use std::{ffi::c_void, os::windows::ffi::OsStrExt};
+    let operation: Vec<u16> = "open\0".encode_utf16().collect();
+    let file: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn ShellExecuteW(
+            window: *mut c_void,
+            operation: *const u16,
+            file: *const u16,
+            parameters: *const u16,
+            directory: *const u16,
+            show_command: i32,
+        ) -> isize;
+    }
+    let result = unsafe {
+        ShellExecuteW(std::ptr::null_mut(), operation.as_ptr(), file.as_ptr(),
+            std::ptr::null(), std::ptr::null(), 1)
+    };
+    anyhow::ensure!(result > 32, "Windows n'a pas pu ouvrir {}", path.display());
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn open_file_with_default_app(path: &std::path::Path) -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(not(target_os = "macos"))]
+    let mut command = std::process::Command::new("xdg-open");
+    command.arg(path).spawn()?;
+    Ok(())
+}
+
 fn project_asset_directory(project_file: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
     let parent = project_file.parent()
         .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?;
     let stem = project_file.file_stem()
         .ok_or_else(|| anyhow::anyhow!("Nom de projet invalide"))?;
     Ok(parent.join(stem).join("assets"))
+}
+
+fn project_browser_directory(project_file: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    let parent = project_file.parent()
+        .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?;
+    let stem = project_file.file_stem()
+        .ok_or_else(|| anyhow::anyhow!("Nom de projet invalide"))?;
+    Ok(parent.join(stem))
 }
 
 fn project_asset_prefix(project_file: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {

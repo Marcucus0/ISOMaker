@@ -82,3 +82,53 @@ impl Project {
         Ok(project)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{coords::TilePos, object::ObjectType};
+
+    #[test]
+    fn project_roundtrip_preserves_world_scenes_and_camera_follow_settings() {
+        let mut project = Project::new("Release fixture");
+        project.world.script = Some("project/scripts/world.py".to_owned());
+        let active_index = project.world.add_scene("Gameplay");
+        let mut camera = crate::object::SceneObject::new(
+            "Main camera",
+            ObjectType::Camera,
+            TilePos::new(4, 6),
+        );
+        camera.camera_zoom = 1.75;
+        camera.camera_interpolation = false;
+        camera.camera_interpolation_speed = 13.5;
+        project.world.active_scene_mut().add_object(camera);
+
+        let saved = project.to_json().unwrap();
+        let loaded = Project::from_json(&saved).unwrap();
+        assert_eq!(loaded.world.name, "Monde principal");
+        assert_eq!(loaded.world.script.as_deref(), Some("project/scripts/world.py"));
+        assert_eq!(loaded.world.scenes.len(), 2);
+        assert_eq!(loaded.world.active_scene_index, active_index);
+        let camera = loaded.world.active_scene().objects.values().next().unwrap();
+        assert_eq!(camera.camera_zoom, 1.75);
+        assert!(!camera.camera_interpolation);
+        assert_eq!(camera.camera_interpolation_speed, 13.5);
+    }
+
+    #[test]
+    fn old_camera_data_receives_interpolation_defaults() {
+        let camera = crate::object::SceneObject::new(
+            "Legacy camera",
+            ObjectType::Camera,
+            TilePos::new(0, 0),
+        );
+        let mut value = serde_json::to_value(camera).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("camera_interpolation");
+        object.remove("camera_interpolation_speed");
+
+        let restored: crate::object::SceneObject = serde_json::from_value(value).unwrap();
+        assert!(restored.camera_interpolation);
+        assert_eq!(restored.camera_interpolation_speed, 8.0);
+    }
+}

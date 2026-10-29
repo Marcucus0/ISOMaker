@@ -89,6 +89,31 @@ def _on_update(game, delta_time):
 Ces propriétés ne sont disponibles que pour un script attaché à un objet ; les
 accéder depuis le script du monde déclenche une erreur explicite.
 
+### Accéder aux autres objets
+
+`game.get_object(uuid)` retourne un `GameObject` en lecture seule, ou `None` si
+l'UUID n'existe pas. `game.find_object(nom)` recherche le premier objet dont le
+nom correspond exactement. Quand plusieurs objets portent le même nom, le
+premier UUID dans l'ordre lexical est retourné. `GameObject` expose `id`,
+`name`, `object_type`, `x`, `y`, `z`, `camera_zoom`, ainsi que les principaux
+champs de l'inspecteur. `get_property(key)` lit aussi une propriété
+personnalisée.
+
+Par exemple, le script du personnage peut déplacer la caméra nommée « Caméra »
+à la position du personnage sans coder l'UUID de la caméra :
+
+```python
+def _on_update(game: GameContext, delta_time: float) -> None:
+    camera = game.find_object("Caméra")
+    if camera is not None:
+        game.move_object(camera.id, game.x, game.y)
+```
+
+La lecture retourne un instantané des objets au début du callback. Les
+commandes de déplacement émises par les scripts sont appliquées après les
+callbacks ; un script voit donc les modifications des callbacks précédents au
+prochain appel.
+
 ### Propriétés d'un objet
 
 Le tableau distingue les champs visibles dans l'inspecteur et ceux qu'un script
@@ -99,13 +124,16 @@ ne signifie pas qu'il est déjà exposé à Python.
 |---|---|---|
 | Identifiant (`id`) | UUID affiché en abrégé | `game.object_id` donne l'UUID complet en lecture seule. |
 | Nom (`name`) | Modifiable | `game.name` en lecture ; `set_self_property("name", valeur)` pour l'écriture. |
-| Type (`object_type`) | Affiché (`Building`, `Character`, `Item`, `Decoration`, `Tile` ou type personnalisé) | `game.object_type` en lecture seule. |
+| Type (`object_type`) | Affiché (`Building`, `Character`, `Item`, `Decoration`, `Camera`, `Tile` ou type personnalisé) | `game.object_type` en lecture seule. |
 | Position (`tile_pos`) | Coordonnées X, Y et élévation Z | `game.x`, `game.y`, `game.z` en lecture ; `set_self_property("x"/"y"/"z", entier)` ou `move_self(x, y)` pour déplacer. |
-| Collisions (`has_collisions`) | Case à cocher, désactivée par défaut | `game.has_collisions` en lecture ; `set_self_property("has_collisions", bool)` pour l'écriture. La simulation de collisions reste à implémenter. |
+| Collisions (`has_collisions`) | Case à cocher pour les objets autres que les caméras | `game.has_collisions` en lecture ; `set_self_property("has_collisions", bool)` pour l'écriture. La simulation de collisions reste à implémenter. |
 | Masqué (`hidden`) | Case à cocher, désactivée par défaut | `game.hidden` en lecture ; `set_self_property("hidden", bool)` pour l'écriture. |
-| Texture (`asset_path`, propriété `texture`) | Fichier image sélectionnable | `game.texture` en lecture ; `set_self_property("texture", chemin)` ou `None` pour l'écriture. |
-| Ajuster la texture (`fit_texture_to_diamond`) | Case à cocher, activée par défaut | `game.fit_texture_to_diamond` en lecture ; `set_self_property("fit_texture_to_diamond", bool)` pour l'écriture. |
-| Rotation (`rotation`) | `North`, `East`, `South` ou `West` | `game.rotation` en lecture ; `set_self_property("rotation", valeur)` pour l'écriture. |
+| Texture (`asset_path`, propriété `texture`) | Fichier image sélectionnable pour les objets autres que les caméras | `game.texture` en lecture ; `set_self_property("texture", chemin)` ou `None` pour l'écriture. |
+| Ajuster la texture (`fit_texture_to_diamond`) | Case à cocher, activée par défaut pour les objets autres que les caméras | `game.fit_texture_to_diamond` en lecture ; `set_self_property("fit_texture_to_diamond", bool)` pour l'écriture. |
+| Rotation (`rotation`) | `North`, `East`, `South` ou `West` pour les objets autres que les caméras | `game.rotation` en lecture ; `set_self_property("rotation", valeur)` pour l'écriture. |
+| Zoom caméra (`camera_zoom`) | Réglage dédié aux caméras | `game.camera_zoom` en lecture ; `set_self_property("camera_zoom", nombre)` en écriture. |
+| Interpolation caméra (`camera_interpolation`) | Case à cocher sur les caméras, activée par défaut | `game.camera_interpolation` en lecture ; `set_self_property("camera_interpolation", bool)` en écriture. |
+| Vitesse d'interpolation (`camera_interpolation_speed`) | Curseur caméra de 0,1 à 20, valeur initiale 8 | `game.camera_interpolation_speed` en lecture ; `set_self_property("camera_interpolation_speed", nombre)` en écriture. |
 | Couche (`layer`) | Sélection parmi `Terrain`, `Decoration`, `Ground`, `Objects`, `Buildings`, `Foreground`, `Overlay` | `game.layer` en lecture ; `set_self_property("layer", valeur)` pour l'écriture. |
 | Empreinte (`footprint`) | Pas de contrôle dédié dans l'inspecteur ; dimensions par défaut 1 × 1 tuile | `get_self_property("footprint_width")` / `get_self_property("footprint_height")`, avec setters correspondants. |
 | Script (`script`) | Chemin du script Python attaché | `game.script` en lecture ; `set_self_property("script", chemin)` ou `None` pour l'écriture. |
@@ -160,9 +188,9 @@ Les scripts d'objet n'ont pas encore de hook d'arrêt dédié.
 | `game.move_object(object_id, x, y)` | Demande le déplacement d'un objet existant. |
 | `game.set_property(object_id, key, value)` | Modifie un champ d'objet éditable ou une propriété personnalisée. |
 | `game.set_global(key, value)` | Émet une commande de valeur globale ; actuellement l'éditeur l'inscrit dans le journal, sans fournir de stockage/lecture de variables globales. |
-| `game.log(message)` | Écrit un message d'information dans le journal de l'éditeur. |
-| `game.log_warning(message)` | Écrit un avertissement. |
-| `game.log_error(message)` | Écrit une erreur. |
+| `game.log(message)` | Écrit un message d'information dans le journal de l'éditeur, préfixé par le fichier script et le nom de l'objet si disponible. |
+| `game.log_warning(message)` | Écrit un avertissement avec la même origine. |
+| `game.log_error(message)` | Écrit une erreur avec la même origine. |
 | `game.delta_time` | Temps écoulé depuis le dernier frame, en secondes. Dans `_on_update`, l'argument `delta_time` fournit la même valeur. |
 | `game.key_pressed(key)` | True tant que la touche est maintenue. |
 | `game.key_just_pressed(key)` | True dans le callback du frame où la touche est pressée. |
@@ -214,9 +242,12 @@ dictionnaire affecté à une propriété devient actuellement la chaîne
 `"[object]"` : évite les dictionnaires avec `set_property`. `set_global` garde
 la valeur JSON dans la commande, mais l'éditeur ne la stocke pas encore.
 
-L'API ne permet pas encore de rechercher un objet ou d'obtenir l'UUID renvoyé
-par `spawn`. Il faut donc déjà connaître l'UUID pour appeler `destroy`,
-`move_object` ou `set_property` depuis le script du monde.
+`game.find_object(name)` recherche un objet par son nom et
+`game.get_object(object_id)` le récupère par UUID. Ces appels renvoient un
+instantané en lecture seule, avec les champs exposés dans `ObjectSnapshot`.
+L'UUID créé par `spawn` n'est toutefois pas encore renvoyé : pour modifier ou
+supprimer un objet précis depuis un script, il faut donc déjà connaître son UUID
+ou le retrouver par son nom.
 
 Les fonctions ajoutent des commandes à une file. Le moteur applique cette file
 après le retour du callback Python ; le script ne modifie donc pas directement
@@ -228,8 +259,10 @@ la scène Rust pendant son exécution.
 traverse l'API Python/Rust et ajoute un message. Le panneau regroupe maintenant
 les messages identiques consécutifs (en affichant « répété N fois ») et conserve
 au plus 200 entrées distinctes ;
-les messages `Info` ne sont pas recopiés dans la sortie console native.
-Les avertissements et erreurs restent transmis au logger natif.
+chaque message indique le fichier Python d'origine et, pour un script d'objet,
+le nom de l'objet (par exemple `[camera.py — Caméra]`). Les messages `Info` ne
+sont pas recopiés dans la sortie console native. Les avertissements et erreurs
+restent transmis au logger natif avec le même préfixe.
 
 Pour observer une valeur périodiquement, limite sa fréquence dans le script :
 

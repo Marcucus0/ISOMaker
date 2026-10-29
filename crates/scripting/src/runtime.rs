@@ -127,12 +127,12 @@ impl ScriptRuntime {
         self.call_hook("on_start", 0.0, HookTarget::Legacy, &[], InputState::default())
     }
 
-    pub fn call_world_launch(&self) -> Result<Vec<GameCommand>, ScriptError> {
-        self.call_hook("_on_game_launch", 0.0, HookTarget::World, &[], InputState::default())
+    pub fn call_world_launch(&self, objects: &[ObjectScriptState]) -> Result<Vec<GameCommand>, ScriptError> {
+        self.call_hook("_on_game_launch", 0.0, HookTarget::World, objects, InputState::default())
     }
 
-    pub fn call_world_update(&self, delta_time: f32, input: &InputState) -> Result<Vec<GameCommand>, ScriptError> {
-        self.call_hook("_on_update", delta_time, HookTarget::World, &[], input.clone())
+    pub fn call_world_update(&self, delta_time: f32, input: &InputState, objects: &[ObjectScriptState]) -> Result<Vec<GameCommand>, ScriptError> {
+        self.call_hook("_on_update", delta_time, HookTarget::World, objects, input.clone())
     }
 
     pub fn call_object_launch(&self, objects: &[ObjectScriptState]) -> Result<Vec<GameCommand>, ScriptError> {
@@ -164,6 +164,7 @@ impl ScriptRuntime {
         }
 
         let mut script_errors = Vec::new();
+        let scene_objects = Arc::new(objects.to_vec());
         Python::with_gil(|py| {
             for loaded in &self.scripts {
                 let object_id = match (&loaded.kind, target) {
@@ -194,10 +195,18 @@ impl ScriptRuntime {
                 let tile_position = self_object.as_ref().map(|object| {
                     (object.tile_pos.x, object.tile_pos.y, object.tile_pos.z)
                 });
+                let script_file = loaded.path.file_name().and_then(|name| name.to_str())
+                    .unwrap_or_else(|| loaded.path.to_str().unwrap_or("script Python"));
+                let script_source = self_object.as_ref()
+                    .map(|object| format!("{script_file} — {}", object.name))
+                    .unwrap_or_else(|| script_file.to_owned());
                 if hook == "_on_game_launch" && target == HookTarget::Objects {
                     log::info!("Appel de _on_game_launch pour l'objet {} ({})", object_id.as_deref().unwrap_or("?"), loaded.path.display());
                 }
-                let ctx = PyGameContext::new(Arc::clone(&self.queue), delta_time, object_id, tile_position, self_object, input.clone());
+                let ctx = PyGameContext::new(
+                    Arc::clone(&self.queue), delta_time, object_id, tile_position,
+                    self_object, Arc::clone(&scene_objects), input.clone(), script_source,
+                );
                 let py_ctx = Py::new(py, ctx)
                     .map_err(|e| ScriptError::Python(e.to_string()))?;
 

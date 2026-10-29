@@ -35,6 +35,9 @@ pub struct Scene {
     pub grid: TileGrid,
     /// Objets de la scène indexés par leur identifiant.
     pub objects: HashMap<ObjectId, SceneObject>,
+    /// Caméra utilisée par défaut au lancement de la lecture.
+    #[serde(default)]
+    pub main_camera: Option<ObjectId>,
 }
 
 impl Scene {
@@ -46,6 +49,7 @@ impl Scene {
             },
             grid: TileGrid::new(),
             objects: HashMap::new(),
+            main_camera: None,
         }
     }
 
@@ -72,12 +76,21 @@ impl Scene {
 
     pub fn add_object(&mut self, obj: SceneObject) -> ObjectId {
         let id = obj.id;
+        if obj.object_type == ObjectType::Camera && self.main_camera.is_none() {
+            self.main_camera = Some(id);
+        }
         self.objects.insert(id, obj);
         id
     }
 
     pub fn remove_object(&mut self, id: ObjectId) -> Option<SceneObject> {
-        self.objects.remove(&id)
+        let removed = self.objects.remove(&id);
+        if self.main_camera == Some(id) {
+            self.main_camera = self.objects.values()
+                .find(|object| object.object_type == ObjectType::Camera)
+                .map(|object| object.id);
+        }
+        removed
     }
 
     pub fn get_object(&self, id: ObjectId) -> Option<&SceneObject> {

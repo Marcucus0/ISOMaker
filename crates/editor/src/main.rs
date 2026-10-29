@@ -52,6 +52,7 @@ struct RunningApp {
     // Application
     editor: EditorApp,
     last_frame: Instant,
+    ctrl_down: bool,
 }
 
 impl ApplicationHandler for App {
@@ -125,6 +126,7 @@ impl ApplicationHandler for App {
             egui_renderer,
             editor,
             last_frame: Instant::now(),
+            ctrl_down: false,
         });
     }
 
@@ -135,6 +137,33 @@ impl ApplicationHandler for App {
         event: WindowEvent,
     ) {
         let App::Running(app) = self else { return };
+
+        if let WindowEvent::ModifiersChanged(modifiers) = &event {
+            app.ctrl_down = modifiers.state().control_key();
+        }
+
+        // Intercepte les raccourcis d'édition avant leur traitement par egui-winit.
+        if app.ctrl_down && !app.egui_ctx.wants_keyboard_input() {
+            if let WindowEvent::KeyboardInput { event: key_event, .. } = &event {
+                if key_event.state == ElementState::Pressed && !key_event.repeat {
+                    let shortcut = match key_event.physical_key {
+                        PhysicalKey::Code(KeyCode::KeyC) => Some(Shortcut::TileCopy),
+                        PhysicalKey::Code(KeyCode::KeyV) => Some(Shortcut::TilePaste),
+                        _ => None,
+                    };
+                    if let Some(shortcut) = shortcut {
+                        let handled = match shortcut {
+                            Shortcut::TileCopy => app.editor.queue_tile_clipboard_shortcut(true),
+                            Shortcut::TilePaste => app.editor.queue_tile_clipboard_shortcut(false),
+                        };
+                        if handled {
+                            app.window.request_redraw();
+                            return;
+                        }
+                    }
+                }
+            }
+        }
 
         // L'entrée jeu est capturée avant que egui puisse consommer un raccourci.
         if let WindowEvent::KeyboardInput { event, .. } = &event {
@@ -262,6 +291,12 @@ impl ApplicationHandler for App {
             app.window.request_redraw();
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum Shortcut {
+    TileCopy,
+    TilePaste,
 }
 
 fn map_key(code: KeyCode) -> Option<engine::Key> {

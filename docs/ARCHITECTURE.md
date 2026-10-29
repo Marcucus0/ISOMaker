@@ -75,7 +75,14 @@ Les objets enregistrent un chemin relatif de la forme
 dans ce dossier et les chemins du projet sont actualisés. Une texture choisie
 après l'enregistrement est copiée directement dans le même dossier. Les
 collisions de noms de fichiers reçoivent un suffixe. Les textures intégrées au
-dépôt sous `assets/` ne sont pas automatiquement liées aux objets.
+dépôt sous `assets/` ne sont pas automatiquement liées aux objets. Le panneau
+Assets est un gestionnaire de fichiers enraciné dans le dossier `<nom_du_projet>/`
+à côté du fichier `.isomaker`; il permet de naviguer dans `assets/`, `scripts/`
+et les autres fichiers du projet. Un double-clic ouvre un fichier avec son application
+Windows par défaut. Les menus contextuels permettent de créer des fichiers et
+dossiers ainsi que de renommer les éléments. Un renommage met à jour les
+chemins de texture des objets, leur propriété `texture`, les scripts d'objets
+et le script du monde, puis sauvegarde le projet.
 
 Le script Python du monde suit le même principe de portabilité : la fenêtre
 **Monde → Script du monde** copie le fichier choisi dans le dossier
@@ -106,8 +113,11 @@ survolée corresponde à sa surface affichée.
 réduit la densité de la grille. Les lignes restent ancrées aux coordonnées du
 monde afin d'éviter qu'elles glissent par rapport aux tuiles pendant le zoom.
 L'affichage de la grille et ses couleurs sont des options de vue de l'éditeur ;
-elles ne sont pas enregistrées dans le projet. Les dimensions de tuile sont
-stockées par scène, mais ne disposent pas encore d'un contrôle dédié dans l'UI.
+elles ne sont pas enregistrées dans le projet. La couleur est sauvegardée dans
+les préférences globales de l'éditeur (`%APPDATA%/MoteurDeJeu/editor_settings.json`).
+L'option qui masque la grille ne s'applique qu'en Lecture et en Pause. Les
+dimensions de tuile sont stockées par scène, mais ne disposent pas encore d'un
+contrôle dédié dans l'UI.
 
 ## Interactions de l'éditeur
 
@@ -115,23 +125,48 @@ stockées par scène, mais ne disposent pas encore d'un contrôle dédié dans l
   compris pendant un glisser.
 - **Sélection** : sélectionne une tuile ou une zone logique. `Shift` sélectionne
   les objets compris dans le rectangle sans sélectionner ni teinter les tuiles.
+  Une tuile seule peut être copiée avec `Ctrl+C` puis collée sur la tuile
+  sélectionnée avec `Ctrl+V`. Les données copiées restent dans l'éditeur.
 - **Déplacer** : déplace la zone sélectionnée avec un aperçu temporaire. Sans
   sélection, déplace l'objet touché, ou la tuile sous le pointeur. Les objets
   déplacés sont identifiés par leur empreinte visuelle.
 - **Rotation** : fait tourner la sélection par quarts de tour successifs dans
   les deux sens, avec un aperçu pendant le glisser.
-- **Remplir** : remplit les tuiles de la sélection ; sans sélection, remplit
-  seulement la tuile sous le pointeur.
-- **Suppression** : `Delete` supprime la sélection d'objets ou les tuiles
-  sélectionnées. `Ctrl+D` désélectionne. `S`, `D` et `R` activent Sélection,
+- **Remplir** : remplit les tuiles de la sélection ; sans sélection, remplace
+  le composant contigu de tuiles identiques à celle sous le pointeur. Les tuiles
+  vides ne remplissent que la tuile cliquée.
+- **Suppression** : la suppression d'objets avec `Delete` ou le bouton de la
+  liste de scène demande confirmation. Supprimer une zone contenant des objets
+  demande confirmation avant de supprimer aussi ses tuiles. `Entrée` confirme et
+  `Échap` annule. `Ctrl+D` désélectionne. `S`, `D` et `R` activent Sélection,
   Déplacer et Rotation.
 - **Annuler / Rétablir** : s'appuie sur des instantanés de scène en mémoire.
+  `Ctrl+Z` annule et `Ctrl+Y` rétablit la dernière modification.
 - **Simulation** : `F9` lance ou reprend Lecture, `F10` arrête, `F11` met en
   pause.
+- **Paramètres éditeur** : **Fichier → Paramètres de l'éditeur** ouvre les
+  préférences propres à l'application. Elles sont enregistrées séparément du
+  projet dans `%APPDATA%/MoteurDeJeu/editor_settings.json`. L'option de masquage
+  de la grille n'agit qu'en Lecture et en Pause ; la couleur de la grille y est
+  aussi réglable et sauvegardée.
+- **Inspecteur** : sa largeur minimale est réduite ; les libellés restent sur
+  une ligne et sont coupés au bord du panneau s'il devient trop étroit, sans
+  ellipse ajoutée.
+- **Projets récents** : le sous-menu **Fichier → Projets récents** garde les dix
+  derniers projets ouverts ou enregistrés dans les paramètres globaux de l'éditeur.
 - **Glisser-déposer** : les modules et prefabs du panneau Bâtiments peuvent être
   déposés dans la scène avec un aperçu de placement.
 - En mode Lecture, un indicateur FPS lissé apparaît dans le coin supérieur droit
   du viewport.
+- **Caméras de scène** : une caméra est un objet déplaçable avec une position
+  isométrique, un zoom réglable (0,1 à 10) et des contrôles pour activer le
+  lissage du suivi et en régler la vitesse. Les caméras ne proposent pas les
+  propriétés de rendu ou collisions qui ne s'appliquent pas à leur icône. La scène mémorise sa caméra
+  principale. En Lecture ou Pause, le sélecteur du viewport permet d'utiliser
+  l'une des caméras ou de revenir à la vue libre de l'éditeur. Le suivi de caméra
+  interpole position et zoom pour éviter les sauts lors des déplacements. Les caméras sont
+  représentées par une icône dans l'éditeur et ne sont pas dessinées comme des
+  objets du jeu. Les anciennes scènes sans caméra restent compatibles.
 
 Les opérations de glisser affichent leur aperçu avant de valider les données au
 relâchement de la souris.
@@ -175,6 +210,10 @@ permettre de choisir ou créer le script.
 `game` expose des méthodes qui ajoutent des commandes à une file ; Rust applique
 les commandes après le retour Python. Les exceptions sont collectées par hook
 et remontées à l'éditeur avec le chemin du script concerné.
+Chaque callback reçoit aussi un instantané en lecture seule des objets de la
+scène. `game.get_object(uuid)` consulte un objet par ID et
+`game.find_object(name)` le cherche par nom exact ; les champs de cet instantané
+incluent sa position. Le monde et les scripts d'objet disposent de ces méthodes.
 
 Les signatures, méthodes disponibles, types de valeurs et exemples sont
 détaillés dans [`PYTHON_API.md`](PYTHON_API.md).
@@ -200,9 +239,11 @@ clavier est capturé par la boucle winit et les états edge restent valables sur
 tous les scripts du même frame. Les scripts choisissent les touches avec des
 constantes typées (`game.keys.Z`, `game.keys.SHIFT`) ; les lettres suivent le
 caractère logique pour fonctionner sur différentes dispositions de clavier.
-Les logs d'information restent dans le panneau de l'éditeur, où les doublons
-consécutifs sont regroupés, pour éviter les écritures console synchrones par
-frame.
+Chaque log Python affiche le nom de son fichier script et, pour un script
+d'objet, le nom de l'objet auquel il est attaché. Les logs d'information restent
+dans le panneau de l'éditeur, où les doublons consécutifs sont regroupés, pour
+éviter les écritures console synchrones par frame ; les avertissements et
+erreurs sont aussi transmis au logger natif avec cette origine.
 
 L'API permet entre autres de créer, déplacer ou supprimer des objets, de changer
 des propriétés, de lire l'état clavier et d'écrire dans les logs. Les scripts

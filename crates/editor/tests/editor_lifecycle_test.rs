@@ -134,9 +134,11 @@ fn object_launch_runs_again_after_toolbar_stop_transition() {
     let relaunched = state.active_scene().get_object(object_id).unwrap();
     assert!(!relaunched.hidden, "_on_game_launch doit se relancer après Stop");
     assert_eq!(relaunched.name, "Launched");
-    assert!(state.log_messages.iter().any(|entry| {
-        entry.message == "object launch regression marker" && entry.repetitions == 2
-    }));
+    let launch_log_count: usize = state.log_messages.iter()
+        .filter(|entry| entry.message.ends_with("object launch regression marker"))
+        .map(|entry| entry.repetitions)
+        .sum();
+    assert_eq!(launch_log_count, 2, "le hook de lancement doit journaliser à chaque démarrage");
     state.stop();
 }
 

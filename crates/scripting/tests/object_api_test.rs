@@ -116,3 +116,57 @@ fn object_hook_is_skipped_when_its_object_is_not_in_the_active_scene() {
     let commands = runtime.call_object_launch(&[]).expect("skip removed object's script");
     assert!(commands.is_empty());
 }
+
+#[test]
+fn object_scripts_can_find_other_objects_and_logs_keep_script_origin() {
+    let guard = test_object();
+    let personage = SceneObject::new(
+        "Personagez",
+        ObjectType::Character,
+        TilePos::with_z(-3, 8, 1),
+    );
+    let personage_id = personage.id.to_string();
+    let mut camera = SceneObject::new("Camera", ObjectType::Camera, TilePos::new(0, 0));
+    camera.camera_interpolation = false;
+    camera.camera_interpolation_speed = 12.5;
+    let camera_id = camera.id.to_string();
+
+    let source = format!(r#"
+def _on_game_launch(game):
+    by_name = game.find_object("Personagez")
+    assert by_name is not None
+    assert by_name.id == "{personage_id}"
+    assert (by_name.x, by_name.y, by_name.z) == (-3, 8, 1)
+
+    by_id = game.get_object("{personage_id}")
+    assert by_id is not None and by_id.name == "Personagez"
+    assert game.get_object("missing-id") is None
+
+    other_camera = game.find_object("Camera")
+    assert other_camera is not None and other_camera.id == "{camera_id}"
+    assert other_camera.camera_interpolation is False
+    assert other_camera.camera_interpolation_speed == 12.5
+
+    game.log("origin info")
+    game.log_warning("origin warning")
+    game.log_error("origin error")
+"#);
+    let temporary = TemporaryScript::new(&source);
+    let mut runtime = ScriptRuntime::new();
+    runtime.load_object_script(&temporary.0, guard.id.to_string()).unwrap();
+
+    let commands = runtime.call_object_launch(&[guard, personage, camera]).unwrap();
+    let script_file = temporary.0.file_name().unwrap().to_str().unwrap();
+    for (expected_level, expected_message) in [
+        (scripting::command::LogLevel::Info, "origin info"),
+        (scripting::command::LogLevel::Warning, "origin warning"),
+        (scripting::command::LogLevel::Error, "origin error"),
+    ] {
+        assert!(commands.iter().any(|command| matches!(command,
+            GameCommand::Log { source, level, message }
+            if source == &format!("{script_file} — Guard")
+                && *level == expected_level
+                && message == expected_message
+        )), "missing {expected_level:?} log with its script source");
+    }
+}

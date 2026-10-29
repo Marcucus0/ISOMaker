@@ -35,6 +35,7 @@ pub enum ObjectType {
     Building,
     Character,
     Item,
+    Camera,
     /// Type personnalisé défini par un script.
     Custom(String),
 }
@@ -53,6 +54,7 @@ impl std::fmt::Display for ObjectType {
             ObjectType::Building => write!(f, "Building"),
             ObjectType::Character => write!(f, "Character"),
             ObjectType::Item => write!(f, "Item"),
+            ObjectType::Camera => write!(f, "Caméra"),
             ObjectType::Custom(s) => write!(f, "Custom({})", s),
         }
     }
@@ -155,6 +157,15 @@ pub struct SceneObject {
     pub properties: HashMap<String, PropValue>,
     /// Script Python associé (chemin relatif au dossier du projet enregistré).
     pub script: Option<String>,
+    /// Zoom appliqué quand cet objet sert de caméra de scène.
+    #[serde(default = "default_camera_zoom")]
+    pub camera_zoom: f32,
+    /// Active le lissage du suivi de cette caméra en mode Lecture.
+    #[serde(default = "default_true")]
+    pub camera_interpolation: bool,
+    /// Vitesse de convergence du suivi, en unités d'interpolation par seconde.
+    #[serde(default = "default_camera_interpolation_speed")]
+    pub camera_interpolation_speed: f32,
     /// Référence à un prefab si l'objet est une instance.
     pub prefab_id: Option<Uuid>,
 }
@@ -178,6 +189,9 @@ impl SceneObject {
                 PropValue::Str(String::new()),
             )]),
             script: None,
+            camera_zoom: 1.0,
+            camera_interpolation: true,
+            camera_interpolation_speed: 8.0,
             prefab_id: None,
         }
     }
@@ -199,4 +213,12 @@ impl SceneObject {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_camera_zoom() -> f32 {
+    1.0
+}
+
+fn default_camera_interpolation_speed() -> f32 {
+    8.0
 }

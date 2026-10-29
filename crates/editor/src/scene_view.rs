@@ -46,6 +46,11 @@ pub struct SceneView {
     pub selected_objects: HashSet<ObjectId>,
     /// Tuiles incluses dans la sélection courante.
     pub selected_tiles: HashSet<TilePos>,
+    delete_requested: Option<(Vec<ObjectId>, Vec<TilePos>)>,
+    /// Données de tuile copiées dans l'éditeur.
+    copied_tile: Option<TileData>,
+    copy_tile_requested: bool,
+    paste_tile_requested: bool,
     /// Paint tile type courant.
     pub paint_tile_type: u16,
     /// Dragging de caméra en cours.
@@ -76,6 +81,10 @@ impl Default for SceneView {
             selected_object: None,
             selected_objects: HashSet::new(),
             selected_tiles: HashSet::new(),
+            delete_requested: None,
+            copied_tile: None,
+            copy_tile_requested: false,
+            paste_tile_requested: false,
             paint_tile_type: 1,
             is_panning: false,
             pan_start: Vec2::ZERO,
@@ -100,6 +109,15 @@ impl Default for SceneView {
 impl SceneView {
     pub fn new() -> Self { Self::default() }
 
+    pub fn take_delete_request(&mut self) -> Option<(Vec<ObjectId>, Vec<TilePos>)> {
+        self.delete_requested.take()
+    }
+
+    pub fn request_tile_clipboard_shortcut(&mut self, copy: bool) {
+        if copy { self.copy_tile_requested = true; }
+        else { self.paste_tile_requested = true; }
+    }
+
     /// Affiche la vue scène dans le `Ui` donné.
     ///
     /// Retourne `true` si la scène a été modifiée (tuile peinte, objet déplacé…).
@@ -111,6 +129,8 @@ impl SceneView {
         asset_root: &Path,
         fps: Option<f32>,
         interactive: bool,
+        show_grid: bool,
+        runtime_camera: &mut Option<ObjectId>,
     ) -> bool {
         let mut modified = false;
         let proj = scene.projection();
@@ -133,39 +153,28 @@ impl SceneView {
             && ui.input(|input| input.key_pressed(egui::Key::Delete))
         {
             if !self.selected_objects.is_empty() {
-                let ids: Vec<_> = self.selected_objects.drain().collect();
-                for id in ids {
-                    modified |= scene.remove_object(id).is_some();
-                }
-                self.selected_object = None;
-                self.selected_tiles.clear();
-            } else if let Some(id) = self.selected_object.take() {
-                modified |= scene.remove_object(id).is_some();
-                self.selected_tiles.clear();
+                self.delete_requested = Some((self.selected_objects.iter().copied().collect(), Vec::new()));
+            } else if let Some(id) = self.selected_object {
+                self.delete_requested = Some((vec![id], Vec::new()));
             } else if !self.selected_tiles.is_empty() {
-                for &tile in &self.selected_tiles {
-                    if !scene.get_tile(tile).is_empty() {
-                        scene.clear_tile(tile);
-                        modified = true;
-                    }
-                }
-                let selected_xy = &self.selected_tiles;
+                let tiles: Vec<_> = self.selected_tiles.iter().copied().collect();
+                let selected_xy = &tiles;
                 let object_ids: Vec<_> = scene.objects.values()
                     .filter(|object| selected_xy.iter().any(|tile| {
                         tile.x == object.tile_pos.x && tile.y == object.tile_pos.y
                     }))
                     .map(|object| object.id)
                     .collect();
-                for id in object_ids {
-                    scene.remove_object(id);
-                    modified = true;
-                    if self.selected_object == Some(id) {
-                        self.selected_object = None;
+                if object_ids.is_empty() {
+                    for tile in &tiles {
+                        if !scene.get_tile(*tile).is_empty() {
+                            scene.clear_tile(*tile);
+                            modified = true;
+                        }
                     }
+                } else {
+                    self.delete_requested = Some((object_ids, tiles));
                 }
-                self.selected_tiles.clear();
-            } else if let Some(id) = self.selected_object.take() {
-                modified |= scene.remove_object(id).is_some();
             }
         }
 
@@ -206,6 +215,34 @@ impl SceneView {
             let world = self.camera.screen_to_world(p.to_vec2() - center, Vec2::ZERO);
             proj.screen_to_tile(ScreenPos::new(world.x, world.y))
         });
+
+        // Copier/coller une tuile avec le focus dans le viewport et l'outil Sélection.
+        if interactive && active_tool == EditorTool::Select {
+            let copy = std::mem::take(&mut self.copy_tile_requested);
+            let paste = std::mem::take(&mut self.paste_tile_requested);
+            if copy && self.selected_tiles.len() == 1 {
+                if let Some(tile) = self.selected_tiles.iter().next().copied() {
+                    self.copied_tile = Some(scene.get_tile(tile));
+                }
+            }
+            if paste {
+                let destination = (self.selected_tiles.len() == 1)
+                    .then(|| self.selected_tiles.iter().next().copied())
+                    .flatten()
+                    .or(self.hovered_tile);
+                if let (Some(tile), Some(data)) = (destination, self.copied_tile) {
+                    if scene.get_tile(tile) != data {
+                        if data.is_empty() { scene.clear_tile(tile); }
+                        else { scene.set_tile(tile, data); }
+                        modified = true;
+                    }
+                    self.selected_tiles.clear();
+                    self.selected_tiles.insert(tile);
+                    self.selected_object = None;
+                    self.selected_objects.clear();
+                }
+            }
+        }
 
         let dropped_build_payload = if interactive {
             response.dnd_release_payload::<BuildDragPayload>()
@@ -450,7 +487,7 @@ impl SceneView {
         painter.rect_filled(rect, 0.0, Color32::from_rgb(30, 35, 40));
 
         // ── Dessin de la grille et des tuiles ─────────────────────────────────
-        self.draw_grid(ui, scene, &painter, &proj, center, rect);
+        self.draw_grid(ui, scene, &painter, &proj, center, rect, show_grid);
 
         // Les données réelles restent en place jusqu'au relâchement du clic.
         if response.dragged_by(egui::PointerButton::Primary)
@@ -484,7 +521,7 @@ impl SceneView {
         }
 
         // ── Dessin des objets ─────────────────────────────────────────────────
-        self.draw_objects(ui.ctx(), scene, &painter, &proj, center, rect, asset_root);
+        self.draw_objects(ui.ctx(), scene, &painter, &proj, center, rect, asset_root, interactive);
 
         // ── Interactions (paint, sélection) ──────────────────────────────────
         if response.clicked_by(egui::PointerButton::Primary)
@@ -502,7 +539,8 @@ impl SceneView {
                     }
                     EditorTool::TileFill => {
                         if self.selected_tiles.is_empty() {
-                            modified |= fill_tiles(scene, std::iter::once(tile), self.paint_tile_type);
+                            let region = connected_tile_region(scene, tile);
+                            modified |= fill_tiles(scene, region, self.paint_tile_type);
                         } else {
                             modified |= fill_tiles(
                                 scene,
@@ -571,6 +609,10 @@ impl SceneView {
             );
         }
 
+        if !interactive {
+            show_runtime_camera_selector(ui.ctx(), scene, rect, runtime_camera);
+        }
+
         modified
     }
 
@@ -583,6 +625,7 @@ impl SceneView {
         proj: &IsoProjection,
         center: Vec2,
         rect: Rect,
+        show_grid: bool,
     ) {
         let zoom = self.camera.zoom;
         let cam_tile = proj.screen_to_tile(
@@ -653,7 +696,7 @@ impl SceneView {
                 }
 
                 // Grille.
-                if self.options.show_grid {
+                if show_grid {
                     // Survol.
                     let is_hovered = detailed && self.hovered_tile == Some(tile);
                     if is_hovered {
@@ -755,10 +798,43 @@ impl SceneView {
         center: Vec2,
         viewport: Rect,
         asset_root: &Path,
+        show_cameras: bool,
     ) {
         let zoom = self.camera.zoom;
         self.object_hit_rects.clear();
         for obj in scene.objects_sorted_for_render() {
+            if obj.object_type == ObjectType::Camera {
+                if show_cameras && !obj.hidden {
+                    let screen = self.tile_to_screen(obj.tile_pos, proj, center);
+                    let icon_size = (16.0 * zoom).clamp(11.0, 22.0);
+                    let icon_rect = Rect::from_center_size(
+                        egui::pos2(screen.x, screen.y - 8.0 * zoom),
+                        Vec2::new(icon_size * 1.25, icon_size),
+                    );
+                    self.object_hit_rects.insert(obj.id, icon_rect);
+                    if icon_rect.intersects(viewport) {
+                        let selected = self.selected_object == Some(obj.id)
+                            || self.selected_objects.contains(&obj.id);
+                        let color = if scene.main_camera == Some(obj.id) {
+                            Color32::from_rgb(75, 180, 190)
+                        } else {
+                            Color32::from_rgb(105, 125, 145)
+                        };
+                        painter.rect_filled(icon_rect, 2.0, color);
+                        painter.rect_stroke(icon_rect, 2.0, Stroke::new(
+                            if selected { 2.0_f32 } else { 1.0_f32 },
+                            if selected { self.options.selection_color } else { Color32::WHITE },
+                        ));
+                        painter.circle_stroke(icon_rect.center(), icon_size * 0.22,
+                            Stroke::new(1.5_f32, Color32::WHITE));
+                        painter.line_segment([
+                            egui::pos2(icon_rect.left() + icon_size * 0.2, icon_rect.bottom()),
+                            egui::pos2(icon_rect.left(), icon_rect.bottom() + icon_size * 0.2),
+                        ], Stroke::new(1.0_f32, color));
+                    }
+                }
+                continue;
+            }
             if obj.hidden {
                 continue;
             }
@@ -1143,6 +1219,46 @@ fn contain_rect(bounds: Rect, image_size: Vec2) -> Rect {
     Rect::from_center_size(bounds.center(), image_size * scale)
 }
 
+fn show_runtime_camera_selector(
+    ctx: &egui::Context,
+    scene: &Scene,
+    viewport: Rect,
+    selected_camera: &mut Option<ObjectId>,
+) {
+    let mut cameras: Vec<_> = scene.objects.values()
+        .filter(|object| object.object_type == ObjectType::Camera)
+        .map(|object| (object.id, object.name.clone()))
+        .collect();
+    cameras.sort_by(|a, b| a.1.cmp(&b.1));
+    if selected_camera.is_some_and(|id| !cameras.iter().any(|(camera_id, _)| *camera_id == id)) {
+        *selected_camera = None;
+    }
+    let selected_name = selected_camera
+        .and_then(|id| cameras.iter().find(|(camera_id, _)| *camera_id == id).map(|(_, name)| name.as_str()))
+        .unwrap_or("Vue libre");
+    let position = egui::pos2(viewport.left() + 8.0, viewport.top() + 8.0);
+
+    egui::Area::new(egui::Id::new("runtime_camera_selector"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(position)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Caméra");
+                    egui::ComboBox::from_id_salt("runtime_camera_choice")
+                        .selected_text(selected_name)
+                        .width(145.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(selected_camera, None, "Vue libre");
+                            for (id, name) in &cameras {
+                                ui.selectable_value(selected_camera, Some(*id), name);
+                            }
+                        });
+                });
+            });
+        });
+}
+
 fn module_object(kind: BuildingModuleKind, mut tile: TilePos) -> SceneObject {
     if kind == BuildingModuleKind::Roof {
         tile.z += 1;
@@ -1178,6 +1294,34 @@ fn fill_tiles(
         }
     }
     modified
+}
+
+/// Récupère le composant contigu de tuiles ayant les mêmes données que la tuile
+/// de départ. Les tuiles vides restent limitées à la tuile cliquée pour éviter
+/// de remplir une région infinie.
+fn connected_tile_region(scene: &Scene, start: TilePos) -> Vec<TilePos> {
+    let target = scene.get_tile(start);
+    if target.is_empty() {
+        return vec![start];
+    }
+
+    let mut region = HashSet::from([TilePos::new(start.x, start.y)]);
+    let mut queue = std::collections::VecDeque::from([TilePos::new(start.x, start.y)]);
+    while let Some(tile) = queue.pop_front() {
+        let neighbors = [
+            tile.x.checked_add(1).map(|x| TilePos::new(x, tile.y)),
+            tile.x.checked_sub(1).map(|x| TilePos::new(x, tile.y)),
+            tile.y.checked_add(1).map(|y| TilePos::new(tile.x, y)),
+            tile.y.checked_sub(1).map(|y| TilePos::new(tile.x, y)),
+        ];
+        for neighbor in neighbors.into_iter().flatten() {
+            if !region.contains(&neighbor) && scene.get_tile(neighbor) == target {
+                region.insert(neighbor);
+                queue.push_back(neighbor);
+            }
+        }
+    }
+    region.into_iter().collect()
 }
 
 fn rotate_tile_in_bounds(tile: TilePos, bounds: (i32, i32, i32, i32), steps: i32) -> TilePos {
@@ -1217,5 +1361,37 @@ fn tile_type_color(tile_type: u16) -> Color32 {
         5 => Color32::from_rgb(130, 130, 130),  // pierre
         6 => Color32::from_rgb(200, 180, 140),  // désert
         _ => Color32::from_rgb(60, 60, 60),     // inconnu
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connected_fill_changes_only_four_connected_matching_tiles() {
+        let mut scene = Scene::new("Fill component");
+        let matching = TileData { tile_type: 1, decoration: 7 };
+        scene.set_tile(TilePos::new(15, 0), matching);
+        scene.set_tile(TilePos::new(16, 0), matching); // Across a chunk boundary.
+        scene.set_tile(TilePos::new(16, 1), TileData::terrain(2)); // Blocks the route.
+        scene.set_tile(TilePos::new(17, 0), TileData::terrain(2)); // Blocks the route.
+        scene.set_tile(TilePos::new(17, 1), matching); // Diagonal, not connected.
+
+        let region = connected_tile_region(&scene, TilePos::new(15, 0));
+        assert_eq!(region.len(), 2);
+        assert!(fill_tiles(&mut scene, region, 3));
+
+        assert_eq!(scene.get_tile(TilePos::new(15, 0)), TileData { tile_type: 3, decoration: 7 });
+        assert_eq!(scene.get_tile(TilePos::new(16, 0)), TileData { tile_type: 3, decoration: 7 });
+        assert_eq!(scene.get_tile(TilePos::new(16, 1)), TileData::terrain(2));
+        assert_eq!(scene.get_tile(TilePos::new(17, 0)), TileData::terrain(2));
+        assert_eq!(scene.get_tile(TilePos::new(17, 1)), matching);
+    }
+
+    #[test]
+    fn connected_fill_on_empty_tile_is_bounded_to_the_clicked_tile() {
+        let scene = Scene::new("Empty fill");
+        assert_eq!(connected_tile_region(&scene, TilePos::new(-4, 8)), vec![TilePos::new(-4, 8)]);
     }
 }

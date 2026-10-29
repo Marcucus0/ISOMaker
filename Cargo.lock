@@ -627,6 +627,7 @@ dependencies = [
  "pollster",
  "renderer",
  "scripting",
+ "serde",
  "serde_json",
  "uuid",
  "wgpu",

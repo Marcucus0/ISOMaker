@@ -40,6 +40,8 @@ pub enum GameCommand {
     },
     /// Message de log émis depuis Python.
     Log {
+        /// Script Python à l'origine du message.
+        source: String,
         level: LogLevel,
         message: String,
     },

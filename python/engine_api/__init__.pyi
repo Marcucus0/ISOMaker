@@ -76,6 +76,34 @@ class KeySet:
     F12: Key
 
 
+class GameObject:
+    """Instantané en lecture seule d'un objet de la scène."""
+
+    id: str
+    object_id: str
+    name: str
+    object_type: str
+    x: int
+    y: int
+    z: int
+    has_collisions: bool
+    hidden: bool
+    fit_texture_to_diamond: bool
+    camera_zoom: float
+    camera_interpolation: bool
+    camera_interpolation_speed: float
+    rotation: str
+    layer: str
+    texture: str | None
+    script: str | None
+    footprint_width: int
+    footprint_height: int
+
+    def get_property(self, key: str) -> Any:
+        """Lit un champ intégré ou une propriété personnalisée ; None si absent."""
+        ...
+
+
 class GameContext:
     """
     Contexte transmis aux hooks du monde et aux scripts attachés aux objets.
@@ -139,6 +167,21 @@ class GameContext:
         ...
 
     @property
+    def camera_zoom(self) -> float:
+        """Zoom de l'objet caméra ; valeur par défaut 1.0."""
+        ...
+
+    @property
+    def camera_interpolation(self) -> bool:
+        """Indique si le suivi de cette caméra est interpolé."""
+        ...
+
+    @property
+    def camera_interpolation_speed(self) -> float:
+        """Vitesse d'interpolation de la caméra, entre 0.1 et 20.0."""
+        ...
+
+    @property
     def x(self) -> int:
         """Coordonnée X actuelle sur la grille (script d'objet uniquement)."""
         ...
@@ -188,6 +231,14 @@ class GameContext:
 
     def get_self_property(self, key: str) -> Any:
         """Lit un champ d'objet ou une propriété personnalisée ; None si absent."""
+        ...
+
+    def get_object(self, object_id: str) -> GameObject | None:
+        """Récupère un instantané en lecture seule par UUID."""
+        ...
+
+    def find_object(self, name: str) -> GameObject | None:
+        """Trouve le premier objet de nom exact, ou None si absent."""
         ...
 
     def spawn(

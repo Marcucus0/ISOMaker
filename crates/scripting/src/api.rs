@@ -86,6 +86,65 @@ impl PyKeySet {
     #[getter(F12)] fn f12(&self) -> PyKey { PyKey { key: Key::F12 } }
 }
 
+/// Instantané en lecture seule d'un objet de scène.
+#[pyclass(name = "GameObject", frozen)]
+#[derive(Clone)]
+pub struct PyGameObject {
+    object: SceneObject,
+}
+
+#[pymethods]
+impl PyGameObject {
+    #[getter]
+    fn id(&self) -> String { self.object.id.to_string() }
+    #[getter]
+    fn object_id(&self) -> String { self.object.id.to_string() }
+    #[getter]
+    fn name(&self) -> String { self.object.name.clone() }
+    #[getter]
+    fn object_type(&self) -> String { object_type_name(&self.object.object_type) }
+    #[getter]
+    fn x(&self) -> i32 { self.object.tile_pos.x }
+    #[getter]
+    fn y(&self) -> i32 { self.object.tile_pos.y }
+    #[getter]
+    fn z(&self) -> i32 { self.object.tile_pos.z }
+    #[getter]
+    fn has_collisions(&self) -> bool { self.object.has_collisions }
+    #[getter]
+    fn hidden(&self) -> bool { self.object.hidden }
+    #[getter]
+    fn fit_texture_to_diamond(&self) -> bool { self.object.fit_texture_to_diamond }
+    #[getter]
+    fn camera_zoom(&self) -> f32 { self.object.camera_zoom }
+    #[getter]
+    fn camera_interpolation(&self) -> bool { self.object.camera_interpolation }
+    #[getter]
+    fn camera_interpolation_speed(&self) -> f32 { self.object.camera_interpolation_speed }
+    #[getter]
+    fn rotation(&self) -> String { format!("{:?}", self.object.rotation) }
+    #[getter]
+    fn layer(&self) -> String { format!("{:?}", self.object.layer) }
+    #[getter]
+    fn texture(&self) -> Option<String> {
+        self.object.asset_path.clone().filter(|path| !path.is_empty()).or_else(|| {
+            self.object.properties.get("texture").and_then(PropValue::as_str)
+                .filter(|path| !path.is_empty()).map(str::to_owned)
+        })
+    }
+    #[getter]
+    fn script(&self) -> Option<String> { self.object.script.clone() }
+    #[getter]
+    fn footprint_width(&self) -> u32 { self.object.footprint.width }
+    #[getter]
+    fn footprint_height(&self) -> u32 { self.object.footprint.height }
+
+    /// Lit un champ intégré ou une propriété personnalisée de l'instantané.
+    fn get_property(&self, py: Python<'_>, key: &str) -> PyResult<PyObject> {
+        json_value_to_py(py, object_to_json_value(&self.object, key))
+    }
+}
+
 /// Contexte de jeu exposé aux scripts Python.
 ///
 /// Les méthodes de cet objet empilent des `GameCommand` dans la file partagée.
@@ -97,7 +156,9 @@ pub struct PyGameContext {
     object_id: Option<String>,
     tile_position: Option<(i32, i32, i32)>,
     self_object: Option<SceneObject>,
+    scene_objects: Arc<Vec<SceneObject>>,
     input: InputState,
+    script_source: String,
 }
 
 impl PyGameContext {
@@ -107,9 +168,11 @@ impl PyGameContext {
         object_id: Option<String>,
         tile_position: Option<(i32, i32, i32)>,
         self_object: Option<SceneObject>,
+        scene_objects: Arc<Vec<SceneObject>>,
         input: InputState,
+        script_source: String,
     ) -> Self {
-        Self { queue, delta_time, object_id, tile_position, self_object, input }
+        Self { queue, delta_time, object_id, tile_position, self_object, scene_objects, input, script_source }
     }
 
     fn push(&self, cmd: GameCommand) -> PyResult<()> {
@@ -163,6 +226,23 @@ impl PyGameContext {
     #[getter]
     fn object_id(&self) -> Option<String> { self.object_id.clone() }
 
+    /// Retourne un instantané en lecture seule de l'objet portant cet UUID.
+    fn get_object(&self, object_id: &str) -> Option<PyGameObject> {
+        self.scene_objects.iter()
+            .find(|object| object.id.to_string().eq_ignore_ascii_case(object_id))
+            .cloned()
+            .map(|object| PyGameObject { object })
+    }
+
+    /// Retourne le premier objet dont le nom correspond exactement.
+    fn find_object(&self, name: &str) -> Option<PyGameObject> {
+        self.scene_objects.iter()
+            .filter(|object| object.name == name)
+            .min_by_key(|object| object.id.to_string())
+            .cloned()
+            .map(|object| PyGameObject { object })
+    }
+
     #[getter]
     fn name(&self) -> PyResult<String> {
         Ok(self.require_self_object()?.name.clone())
@@ -212,6 +292,21 @@ impl PyGameContext {
         Ok(self.require_self_object()?.script.clone())
     }
 
+    #[getter]
+    fn camera_zoom(&self) -> PyResult<f32> {
+        Ok(self.require_self_object()?.camera_zoom)
+    }
+
+    #[getter]
+    fn camera_interpolation(&self) -> PyResult<bool> {
+        Ok(self.require_self_object()?.camera_interpolation)
+    }
+
+    #[getter]
+    fn camera_interpolation_speed(&self) -> PyResult<f32> {
+        Ok(self.require_self_object()?.camera_interpolation_speed)
+    }
+
     /// Lit un champ intégré ou une propriété personnalisée de cet objet.
     fn get_self_property(&self, py: Python<'_>, key: &str) -> PyResult<PyObject> {
         let object = self.require_self_object()?;
@@ -234,6 +329,11 @@ impl PyGameContext {
             "script" => object.script.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
             "footprint_width" => serde_json::Value::Number(object.footprint.width.into()),
             "footprint_height" => serde_json::Value::Number(object.footprint.height.into()),
+            "camera_zoom" => serde_json::Number::from_f64(object.camera_zoom as f64)
+                .map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null),
+            "camera_interpolation" => serde_json::Value::Bool(object.camera_interpolation),
+            "camera_interpolation_speed" => serde_json::Number::from_f64(object.camera_interpolation_speed as f64)
+                .map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null),
             custom => object.properties.get(custom).map(prop_to_json).unwrap_or(serde_json::Value::Null),
         };
         let json = serde_json::to_string(&value).map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
@@ -309,20 +409,59 @@ impl PyGameContext {
 
     /// Émet un message de log depuis le script.
     fn log(&self, message: String) -> PyResult<()> {
-        self.push(GameCommand::Log { level: LogLevel::Info, message })
+        self.push(GameCommand::Log { source: self.script_source.clone(), level: LogLevel::Info, message })
     }
 
     fn log_warning(&self, message: String) -> PyResult<()> {
-        self.push(GameCommand::Log { level: LogLevel::Warning, message })
+        self.push(GameCommand::Log { source: self.script_source.clone(), level: LogLevel::Warning, message })
     }
 
     fn log_error(&self, message: String) -> PyResult<()> {
-        self.push(GameCommand::Log { level: LogLevel::Error, message })
+        self.push(GameCommand::Log { source: self.script_source.clone(), level: LogLevel::Error, message })
     }
 }
 
 fn object_type_name(object_type: &world::object::ObjectType) -> String {
-    object_type.to_string()
+    match object_type {
+        world::object::ObjectType::Camera => "Camera".to_owned(),
+        _ => object_type.to_string(),
+    }
+}
+
+fn object_to_json_value(object: &SceneObject, key: &str) -> serde_json::Value {
+    match key {
+        "id" | "object_id" => serde_json::Value::String(object.id.to_string()),
+        "name" => serde_json::Value::String(object.name.clone()),
+        "type" | "object_type" => serde_json::Value::String(object_type_name(&object.object_type)),
+        "x" => serde_json::Value::Number(object.tile_pos.x.into()),
+        "y" => serde_json::Value::Number(object.tile_pos.y.into()),
+        "z" => serde_json::Value::Number(object.tile_pos.z.into()),
+        "has_collisions" => serde_json::Value::Bool(object.has_collisions),
+        "hidden" => serde_json::Value::Bool(object.hidden),
+        "fit_texture_to_diamond" => serde_json::Value::Bool(object.fit_texture_to_diamond),
+        "rotation" => serde_json::Value::String(format!("{:?}", object.rotation)),
+        "layer" => serde_json::Value::String(format!("{:?}", object.layer)),
+        "texture" | "asset_path" => object.asset_path.clone().filter(|path| !path.is_empty())
+            .or_else(|| object.properties.get("texture").and_then(PropValue::as_str)
+                .filter(|path| !path.is_empty()).map(str::to_owned))
+            .map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+        "script" => object.script.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+        "footprint_width" => serde_json::Value::Number(object.footprint.width.into()),
+        "footprint_height" => serde_json::Value::Number(object.footprint.height.into()),
+        "camera_zoom" => serde_json::Number::from_f64(object.camera_zoom as f64)
+            .map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null),
+        "camera_interpolation" => serde_json::Value::Bool(object.camera_interpolation),
+        "camera_interpolation_speed" => serde_json::Number::from_f64(object.camera_interpolation_speed as f64)
+            .map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null),
+        custom => object.properties.get(custom).map(prop_to_json).unwrap_or(serde_json::Value::Null),
+    }
+}
+
+fn json_value_to_py(py: Python<'_>, value: serde_json::Value) -> PyResult<PyObject> {
+    let json = serde_json::to_string(&value)
+        .map_err(|error| pyo3::exceptions::PyRuntimeError::new_err(error.to_string()))?;
+    let json_module = PyModule::import_bound(py, "json")?;
+    Ok(json_module.getattr("loads")?.call1((json,))?.unbind())
 }
 
 fn prop_to_json(value: &PropValue) -> serde_json::Value {

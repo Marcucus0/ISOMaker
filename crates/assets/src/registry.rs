@@ -78,3 +78,24 @@ impl<T> AssetRegistry<T> {
         self.entries.get(&handle.id).map(|e| e.source_path.as_path())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_path_reuses_handle_and_evict_keeps_registration() {
+        let mut registry = AssetRegistry::<String>::new();
+        let first_id = registry.register("assets/terrain.png").id;
+        let duplicate_id = registry.register("assets/terrain.png").id;
+        assert_eq!(first_id, duplicate_id);
+        assert_eq!(registry.source_path(Handle::new(first_id)), Some(Path::new("assets/terrain.png")));
+        assert!(!registry.is_loaded(Handle::new(first_id)));
+
+        registry.store(Handle::new(first_id), "decoded image".to_owned());
+        assert_eq!(registry.get(Handle::new(duplicate_id)).map(String::as_str), Some("decoded image"));
+        registry.evict(Handle::new(first_id));
+        assert!(!registry.is_loaded(Handle::new(first_id)));
+        assert_eq!(registry.source_path(Handle::new(first_id)), Some(Path::new("assets/terrain.png")));
+    }
+}
