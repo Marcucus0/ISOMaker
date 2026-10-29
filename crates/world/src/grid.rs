@@ -3,6 +3,52 @@
 use serde::{Deserialize, Serialize};
 use crate::coords::TilePos;
 
+/// Définition d'un type de tuile propre à un projet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TileDefinition {
+    pub id: u16,
+    pub name: String,
+    /// Couleur RGBA utilisée quand aucune texture n'est assignée.
+    pub color: [u8; 4],
+    /// Chemin de texture relatif au dossier racine du projet.
+    #[serde(default)]
+    pub texture: Option<String>,
+    /// Métadonnée destinée aux futurs outils de collision.
+    #[serde(default)]
+    pub has_collisions: bool,
+    /// Choisit une orientation stable pseudo-aléatoire par tuile pour la texture.
+    #[serde(default)]
+    pub randomize_texture_rotation: bool,
+}
+
+impl TileDefinition {
+    pub fn new(id: u16, name: impl Into<String>, color: [u8; 4]) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            color,
+            texture: None,
+            has_collisions: false,
+            randomize_texture_rotation: false,
+        }
+    }
+}
+
+/// Les six types historiques restent le jeu de tuiles initial de chaque projet.
+pub fn default_tile_definitions() -> Vec<TileDefinition> {
+    [
+        (1, "Herbe", [80, 140, 70, 255]),
+        (2, "Eau", [60, 100, 160, 255]),
+        (3, "Sable", [160, 140, 100, 255]),
+        (4, "Terre", [100, 90, 80, 255]),
+        (5, "Pierre", [130, 130, 130, 255]),
+        (6, "Désert", [200, 180, 140, 255]),
+    ]
+    .into_iter()
+    .map(|(id, name, color)| TileDefinition::new(id, name, color))
+    .collect()
+}
+
 /// Données d'une tuile individuelle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct TileData {

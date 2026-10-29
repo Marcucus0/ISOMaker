@@ -1,10 +1,16 @@
 //! Vue centrale de la scène isométrique dessinée via egui Painter.
 
 use egui::{Color32, Painter, Rect, Sense, Stroke, Ui, Vec2};
-use std::{collections::{HashMap, HashSet}, path::Path};
+use image::AnimationDecoder;
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::BufReader,
+    path::Path,
+};
 use world::{
     coords::{IsoProjection, ScreenPos, TilePos},
-    grid::TileData,
+    grid::{TileData, TileDefinition},
     object::{ObjectId, ObjectType, Rotation4, SceneObject},
     prefab::{BuildingModuleKind, Prefab},
     scene::Scene,
@@ -69,7 +75,39 @@ pub struct SceneView {
     rotate_bounds: Option<(i32, i32, i32, i32)>,
     rotate_tiles: Vec<(TilePos, TileData)>,
     texture_cache: HashMap<String, Option<egui::TextureHandle>>,
+    animated_tile_textures: HashMap<String, AnimatedTileTexture>,
+    failed_animated_tile_textures: HashSet<String>,
     object_hit_rects: HashMap<ObjectId, Rect>,
+}
+
+struct AnimatedTileFrame {
+    image: egui::ColorImage,
+    duration_seconds: f32,
+}
+
+struct AnimatedTileTexture {
+    frames: Vec<AnimatedTileFrame>,
+    texture: egui::TextureHandle,
+    current_frame: usize,
+    elapsed_seconds: f32,
+}
+
+impl AnimatedTileTexture {
+    fn advance(&mut self, delta_time: f32) {
+        self.elapsed_seconds += delta_time.max(0.0);
+        let mut changed = false;
+        while self.elapsed_seconds >= self.frames[self.current_frame].duration_seconds {
+            self.elapsed_seconds -= self.frames[self.current_frame].duration_seconds;
+            self.current_frame = (self.current_frame + 1) % self.frames.len();
+            changed = true;
+        }
+        if changed {
+            self.texture.set(
+                self.frames[self.current_frame].image.clone(),
+                egui::TextureOptions::NEAREST,
+            );
+        }
+    }
 }
 
 impl Default for SceneView {
@@ -101,6 +139,8 @@ impl Default for SceneView {
             rotate_bounds: None,
             rotate_tiles: Vec::new(),
             texture_cache: HashMap::new(),
+            animated_tile_textures: HashMap::new(),
+            failed_animated_tile_textures: HashSet::new(),
             object_hit_rects: HashMap::new(),
         }
     }
@@ -125,14 +165,17 @@ impl SceneView {
         &mut self,
         ui: &mut Ui,
         scene: &mut Scene,
+        tile_definitions: &[TileDefinition],
         active_tool: EditorTool,
         asset_root: &Path,
+        delta_time: f32,
         fps: Option<f32>,
         interactive: bool,
         show_grid: bool,
         runtime_camera: &mut Option<ObjectId>,
     ) -> bool {
         let mut modified = false;
+        self.update_animated_tile_textures(ui.ctx(), asset_root, tile_definitions, delta_time);
         let proj = scene.projection();
         let active_tool = if interactive { active_tool } else { EditorTool::Select };
 
@@ -487,7 +530,7 @@ impl SceneView {
         painter.rect_filled(rect, 0.0, Color32::from_rgb(30, 35, 40));
 
         // ── Dessin de la grille et des tuiles ─────────────────────────────────
-        self.draw_grid(ui, scene, &painter, &proj, center, rect, show_grid);
+        self.draw_grid(ui, scene, tile_definitions, asset_root, &painter, &proj, center, rect, show_grid);
 
         // Les données réelles restent en place jusqu'au relâchement du clic.
         if response.dragged_by(egui::PointerButton::Primary)
@@ -618,9 +661,11 @@ impl SceneView {
 
     /// Dessine la grille isométrique et les tuiles peintes.
     fn draw_grid(
-        &self,
-        _ui: &Ui,
+        &mut self,
+        ui: &Ui,
         scene: &Scene,
+        tile_definitions: &[TileDefinition],
+        asset_root: &Path,
         painter: &Painter,
         proj: &IsoProjection,
         center: Vec2,
@@ -641,7 +686,7 @@ impl SceneView {
         let step = if detailed { 1 } else { (2.0 / zoom).ceil() as i32 };
 
         if !detailed {
-            self.draw_low_zoom_tiles(scene, painter, proj, center, rect, cam_tile, tile_range);
+            self.draw_low_zoom_tiles(scene, tile_definitions, painter, proj, center, rect, cam_tile, tile_range);
         }
 
         // Anchor coarse grid vertices to world coordinates, not to the camera
@@ -680,11 +725,33 @@ impl SceneView {
                     // Full tile fill and selection are only useful at readable sizes.
                     let tile_data = scene.get_tile(tile);
                     if !tile_data.is_empty() {
-                        painter.add(egui::Shape::convex_polygon(
-                            corners.to_vec(),
-                            tile_type_color(tile_data.tile_type),
-                            Stroke::NONE,
-                        ));
+                        let definition = tile_definitions.iter().find(|definition| definition.id == tile_data.tile_type);
+                        let texture = definition.and_then(|definition| definition.texture.as_deref())
+                            .and_then(|path| self.load_tile_texture_id(ui.ctx(), asset_root, path));
+                        if let Some(texture_id) = texture {
+                            let base_uvs = [
+                                egui::pos2(0.5, 0.0), egui::pos2(1.0, 0.5),
+                                egui::pos2(0.5, 1.0), egui::pos2(0.0, 0.5),
+                            ];
+                            let rotation = definition
+                                .filter(|definition| definition.randomize_texture_rotation)
+                                .map(|_| tile_texture_rotation(tile, tile_data.tile_type))
+                                .unwrap_or(0);
+                            let uvs: [egui::Pos2; 4] =
+                                std::array::from_fn(|index| base_uvs[(index + rotation) % 4]);
+                            let mut mesh = egui::Mesh::with_texture(texture_id);
+                            let first = mesh.vertices.len() as u32;
+                            for (position, uv) in corners.into_iter().zip(uvs) {
+                                mesh.vertices.push(egui::epaint::Vertex { pos: position, uv, color: Color32::WHITE });
+                            }
+                            mesh.add_triangle(first, first + 1, first + 2);
+                            mesh.add_triangle(first, first + 2, first + 3);
+                            painter.add(egui::Shape::mesh(mesh));
+                        } else {
+                            painter.add(egui::Shape::convex_polygon(
+                                corners.to_vec(), tile_type_color(tile_data.tile_type, tile_definitions), Stroke::NONE,
+                            ));
+                        }
                     }
                     if self.selected_tiles.contains(&tile) {
                         painter.add(egui::Shape::convex_polygon(
@@ -723,6 +790,7 @@ impl SceneView {
     fn draw_low_zoom_tiles(
         &self,
         scene: &Scene,
+        tile_definitions: &[TileDefinition],
         painter: &Painter,
         proj: &IsoProjection,
         center: Vec2,
@@ -773,7 +841,7 @@ impl SceneView {
                     );
                     if !tile_bounds.intersects(rect) { continue; }
 
-                    let color = tile_type_color(data.tile_type);
+                    let color = tile_type_color(data.tile_type, tile_definitions);
                     let first = mesh.vertices.len() as u32;
                     mesh.colored_vertex(egui::pos2(screen.x, screen.y - half_height), color);
                     mesh.colored_vertex(egui::pos2(screen.x + half_width, screen.y), color);
@@ -966,6 +1034,49 @@ impl SceneView {
         self.texture_cache.get(&cache_key)
             .and_then(Option::as_ref)
             .map(|texture| (texture.id(), texture.size_vec2()))
+    }
+
+    fn load_tile_texture_id(
+        &mut self,
+        ctx: &egui::Context,
+        asset_root: &Path,
+        asset_path: &str,
+    ) -> Option<egui::TextureId> {
+        let path = Path::new(asset_path);
+        if path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("gif")) {
+            let cache_key = format!("{}|{}", asset_root.display(), asset_path);
+            return self.animated_tile_textures.get(&cache_key).map(|animation| animation.texture.id());
+        }
+        self.load_texture(ctx, asset_root, asset_path).map(|(id, _)| id)
+    }
+
+    fn update_animated_tile_textures(
+        &mut self,
+        ctx: &egui::Context,
+        asset_root: &Path,
+        definitions: &[TileDefinition],
+        delta_time: f32,
+    ) {
+        for path in definitions.iter().filter_map(|definition| definition.texture.as_deref()) {
+            let relative = Path::new(path);
+            if !relative.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("gif")) {
+                continue;
+            }
+            let cache_key = format!("{}|{}", asset_root.display(), path);
+            if self.animated_tile_textures.contains_key(&cache_key)
+                || self.failed_animated_tile_textures.contains(&cache_key) {
+                continue;
+            }
+            let full_path = if relative.is_absolute() { relative.to_owned() } else { asset_root.join(relative) };
+            if let Some(animation) = load_animated_tile_texture(ctx, &full_path, &cache_key) {
+                self.animated_tile_textures.insert(cache_key, animation);
+            } else {
+                self.failed_animated_tile_textures.insert(cache_key);
+            }
+        }
+        for animation in self.animated_tile_textures.values_mut() {
+            animation.advance(delta_time);
+        }
     }
 
     fn draw_move_preview(&self, scene: &Scene, painter: &Painter, proj: &IsoProjection, center: Vec2) {
@@ -1194,6 +1305,38 @@ impl SceneView {
     }
 }
 
+fn load_animated_tile_texture(
+    ctx: &egui::Context,
+    path: &Path,
+    cache_key: &str,
+) -> Option<AnimatedTileTexture> {
+    let file = File::open(path).ok()?;
+    let decoder = image::codecs::gif::GifDecoder::new(BufReader::new(file)).ok()?;
+    let mut frame_iterator = decoder.into_frames();
+    let mut decoded_frames = Vec::new();
+    for _ in 0..512 {
+        match frame_iterator.next() {
+            Some(Ok(frame)) => decoded_frames.push(frame),
+            Some(Err(_)) => return None,
+            None => break,
+        }
+    }
+    let mut frames = Vec::with_capacity(decoded_frames.len());
+    for frame in decoded_frames {
+        let (numerator, denominator) = frame.delay().numer_denom_ms();
+        let duration_seconds = (numerator as f32 / denominator.max(1) as f32 / 1000.0).max(0.02);
+        let rgba = frame.into_buffer();
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        frames.push(AnimatedTileFrame {
+            image: egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+            duration_seconds,
+        });
+    }
+    let first = frames.first()?.image.clone();
+    let texture = ctx.load_texture(cache_key.to_owned(), first, egui::TextureOptions::NEAREST);
+    Some(AnimatedTileTexture { frames, texture, current_frame: 0, elapsed_seconds: 0.0 })
+}
+
 fn objects_in_tile_rectangle(scene: &Scene, start: TilePos, end: TilePos) -> HashSet<ObjectId> {
     let min_x = start.x.min(end.x);
     let max_x = start.x.max(end.x);
@@ -1352,16 +1495,24 @@ fn tile_rectangle(start: TilePos, end: TilePos) -> HashSet<TilePos> {
 }
 
 /// Couleur de prévisualisation selon le type de tuile (1-16 définis arbitrairement).
-fn tile_type_color(tile_type: u16) -> Color32 {
-    match tile_type {
-        1 => Color32::from_rgb(80, 140, 70),    // herbe
-        2 => Color32::from_rgb(60, 100, 160),   // eau
-        3 => Color32::from_rgb(160, 140, 100),  // sable
-        4 => Color32::from_rgb(100, 90, 80),    // terre
-        5 => Color32::from_rgb(130, 130, 130),  // pierre
-        6 => Color32::from_rgb(200, 180, 140),  // désert
-        _ => Color32::from_rgb(60, 60, 60),     // inconnu
-    }
+fn tile_type_color(tile_type: u16, definitions: &[TileDefinition]) -> Color32 {
+    definitions.iter().find(|definition| definition.id == tile_type)
+        .map(|definition| Color32::from_rgba_unmultiplied(
+            definition.color[0], definition.color[1], definition.color[2], definition.color[3],
+        ))
+        .unwrap_or_else(|| Color32::from_rgb(60, 60, 60))
+}
+
+fn tile_texture_rotation(tile: TilePos, tile_type: u16) -> usize {
+    let mut hash = (tile.x as u32).wrapping_mul(0x9E37_79B9)
+        ^ (tile.y as u32).wrapping_mul(0x85EB_CA6B)
+        ^ (tile_type as u32).wrapping_mul(0xC2B2_AE35);
+    hash ^= hash >> 16;
+    hash = hash.wrapping_mul(0x7FEB_352D);
+    hash ^= hash >> 15;
+    hash = hash.wrapping_mul(0x846C_A68B);
+    hash ^= hash >> 16;
+    (hash & 3) as usize
 }
 
 #[cfg(test)]
@@ -1393,5 +1544,49 @@ mod tests {
     fn connected_fill_on_empty_tile_is_bounded_to_the_clicked_tile() {
         let scene = Scene::new("Empty fill");
         assert_eq!(connected_tile_region(&scene, TilePos::new(-4, 8)), vec![TilePos::new(-4, 8)]);
+    }
+
+    #[test]
+    fn tile_texture_rotation_is_stable_and_spans_multiple_quarter_turns() {
+        let tile = TilePos::new(-17, 42);
+        let rotation = tile_texture_rotation(tile, 7);
+        assert_eq!(tile_texture_rotation(tile, 7), rotation);
+        assert!(rotation < 4);
+
+        let rotations = (-50..50)
+            .map(|x| tile_texture_rotation(TilePos::new(x, x * 3), 7))
+            .collect::<HashSet<_>>();
+        assert!(rotations.len() >= 3, "les emplacements doivent varier les orientations");
+    }
+
+    #[test]
+    fn animated_gif_tile_texture_decodes_frames_and_advances() {
+        use image::{codecs::gif::GifEncoder, Delay, Frame, Rgba, RgbaImage};
+        use std::{fs::File, time::{SystemTime, UNIX_EPOCH}};
+
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!("isomaker_tile_animation_{}_{}.gif", std::process::id(), nonce));
+        let frames = [
+            Frame::from_parts(RgbaImage::from_pixel(2, 2, Rgba([255, 0, 0, 255])), 0, 0,
+                Delay::from_numer_denom_ms(40, 1)),
+            Frame::from_parts(RgbaImage::from_pixel(2, 2, Rgba([0, 255, 0, 255])), 0, 0,
+                Delay::from_numer_denom_ms(40, 1)),
+        ];
+        GifEncoder::new(File::create(&path).unwrap())
+            .encode_frames(frames)
+            .unwrap();
+
+        let context = egui::Context::default();
+        let mut animation = load_animated_tile_texture(&context, &path, "test-gif")
+            .expect("GIF animé valide");
+        assert_eq!(animation.frames.len(), 2);
+        assert_eq!(animation.current_frame, 0);
+        animation.advance(0.05);
+        assert_eq!(animation.current_frame, 1);
+        animation.advance(0.05);
+        assert_eq!(animation.current_frame, 0, "l'animation boucle");
+
+        drop(animation);
+        std::fs::remove_file(path).unwrap();
     }
 }

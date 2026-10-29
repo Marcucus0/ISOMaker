@@ -10,7 +10,7 @@ use engine::game_loop::{EngineMode, GameLoop};
 use engine::InputState;
 use serde::{Deserialize, Serialize};
 use scripting::{ScriptRuntime, GameCommand};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use world::{
     object::{ObjectId, ObjectType},
     project::Project,
@@ -43,12 +43,15 @@ pub struct EditorState {
     /// Historique des états de scène pour annuler/rétablir les éditions.
     undo_history: Vec<String>,
     redo_history: Vec<String>,
+    next_log_id: u64,
 }
 
+#[derive(Clone)]
 pub struct LogEntry {
     pub level: log::Level,
     pub message: String,
     pub repetitions: usize,
+    pub id: u64,
 }
 
 impl EditorState {
@@ -72,6 +75,7 @@ impl EditorState {
             log_messages: VecDeque::new(),
             undo_history: Vec::new(),
             redo_history: Vec::new(),
+            next_log_id: 1,
         }
     }
 
@@ -201,21 +205,47 @@ impl EditorState {
                 GameCommand::Move { object_id, x, y } => {
                     if let Ok(uuid) = uuid::Uuid::parse_str(&object_id) {
                         let id = world::object::ObjectId(uuid);
-                        if let Some(obj) = self.active_scene_mut().get_object_mut(id) {
-                            obj.tile_pos.x = x;
-                            obj.tile_pos.y = y;
+                        let destination = self.active_scene().get_object(id)
+                            .map(|object| TilePos::with_z(x, y, object.tile_pos.z));
+                        if let Some(destination) = destination {
+                            let result = move_object_with_collisions(
+                                self.project.world.active_scene_mut(), &self.project.tile_definitions, id, destination,
+                            );
+                            let _ = result;
                         }
                     }
                 }
                 GameCommand::SetProperty { object_id, key, value } => {
                     if let Ok(uuid) = uuid::Uuid::parse_str(&object_id) {
                         let id = world::object::ObjectId(uuid);
-                        let result = match self.active_scene_mut().get_object_mut(id) {
-                            Some(obj) => apply_script_object_property(obj, &key, value),
-                            None => Err(format!("Objet introuvable : {object_id}")),
+                        let is_position = matches!(key.as_str(), "x" | "y" | "z");
+                        let result = if is_position {
+                            let coordinate = value.as_i64().and_then(|v| i32::try_from(v).ok())
+                                .ok_or_else(|| "attend un entier".to_owned());
+                            match (self.active_scene().get_object(id), coordinate) {
+                                (Some(object), Ok(coordinate)) => {
+                                    let mut destination = object.tile_pos;
+                                    match key.as_str() {
+                                        "x" => destination.x = coordinate,
+                                        "y" => destination.y = coordinate,
+                                        _ => destination.z = coordinate,
+                                    }
+                                    move_object_with_collisions(
+                                        self.project.world.active_scene_mut(), &self.project.tile_definitions, id, destination,
+                                    ).map(|_| ())
+                                }
+                                (None, _) => Err(format!("Objet introuvable : {object_id}")),
+                                (_, Err(error)) => Err(error),
+                            }
+                        } else {
+                            match self.active_scene_mut().get_object_mut(id) {
+                                Some(obj) => apply_script_object_property(obj, &key, value),
+                                None => Err(format!("Objet introuvable : {object_id}")),
+                            }
                         };
                         if let Err(error) = result {
-                            self.push_log(log::Level::Error, format!("Propriété objet `{key}` : {error}"));
+                            let level = if is_position { log::Level::Warn } else { log::Level::Error };
+                            self.store_log(level, format!("Propriété objet `{key}` : {error}"));
                         }
                     }
                 }
@@ -265,7 +295,9 @@ impl EditorState {
         if self.log_messages.len() >= LOG_LIMIT {
             self.log_messages.pop_front();
         }
-        self.log_messages.push_back(LogEntry { level, message: msg, repetitions: 1 });
+        let id = self.next_log_id;
+        self.next_log_id = self.next_log_id.wrapping_add(1).max(1);
+        self.log_messages.push_back(LogEntry { level, message: msg, repetitions: 1, id });
     }
 
     fn record_undo(&mut self, snapshot: String) {
@@ -302,6 +334,59 @@ impl EditorState {
     }
 }
 
+fn move_object_with_collisions(
+    scene: &mut Scene,
+    tile_definitions: &[world::grid::TileDefinition],
+    object_id: world::object::ObjectId,
+    destination: TilePos,
+) -> Result<bool, String> {
+    let object = scene.get_object(object_id)
+        .ok_or_else(|| format!("Objet introuvable : {object_id}"))?
+        .clone();
+    if object.has_collisions {
+        let width = object.footprint.width.max(1) as i64;
+        let height = object.footprint.height.max(1) as i64;
+        let left = destination.x as i64;
+        let top = destination.y as i64;
+        let right = left + width;
+        let bottom = top + height;
+
+        for y in top..bottom {
+            for x in left..right {
+                if x < i32::MIN as i64 || x > i32::MAX as i64
+                    || y < i32::MIN as i64 || y > i32::MAX as i64 {
+                    return Ok(false);
+                }
+                let tile = scene.get_tile(TilePos::new(x as i32, y as i32));
+                if tile_definitions.iter().any(|definition| {
+                    definition.id == tile.tile_type && definition.has_collisions
+                }) {
+                    return Ok(false);
+                }
+            }
+        }
+
+        let overlaps_object = scene.objects.values().any(|other| {
+            if other.id == object_id || !other.has_collisions || other.tile_pos.z != destination.z {
+                return false;
+            }
+            let other_left = other.tile_pos.x as i64;
+            let other_top = other.tile_pos.y as i64;
+            let other_right = other_left + other.footprint.width.max(1) as i64;
+            let other_bottom = other_top + other.footprint.height.max(1) as i64;
+            left < other_right && right > other_left && top < other_bottom && bottom > other_top
+        });
+        if overlaps_object {
+            return Ok(false);
+        }
+    }
+
+    if let Some(object) = scene.get_object_mut(object_id) {
+        object.tile_pos = destination;
+    }
+    Ok(true)
+}
+
 fn json_to_prop(v: serde_json::Value) -> world::object::PropValue {
     use world::object::PropValue;
     match v {
@@ -314,6 +399,14 @@ fn json_to_prop(v: serde_json::Value) -> world::object::PropValue {
         serde_json::Value::String(s)   => PropValue::Str(s),
         serde_json::Value::Array(arr)  => PropValue::List(arr.into_iter().map(json_to_prop).collect()),
         serde_json::Value::Object(_)   => PropValue::Str("[object]".to_string()),
+    }
+}
+
+fn format_log_entry(entry: &LogEntry) -> String {
+    if entry.repetitions > 1 {
+        format!("{}  (répété {} fois)", entry.message, entry.repetitions)
+    } else {
+        entry.message.clone()
     }
 }
 
@@ -449,6 +542,11 @@ pub struct EditorApp {
     runtime_camera_position: Option<egui::Vec2>,
     runtime_camera_zoom: Option<f32>,
     pending_deletion: Option<(Vec<ObjectId>, Vec<TilePos>)>,
+    selected_log_ids: HashSet<u64>,
+    log_selection_anchor: Option<u64>,
+    log_selection_focused: bool,
+    log_panel_rect: Option<egui::Rect>,
+    pending_log_copy: bool,
     /// Chemin du projet courant pour la sauvegarde.
     project_path: Option<std::path::PathBuf>,
 }
@@ -495,6 +593,11 @@ impl EditorApp {
             runtime_camera_position: None,
             runtime_camera_zoom: None,
             pending_deletion: None,
+            selected_log_ids: HashSet::new(),
+            log_selection_anchor: None,
+            log_selection_focused: false,
+            log_panel_rect: None,
+            pending_log_copy: false,
             project_path: None,
         }
     }
@@ -526,6 +629,12 @@ impl EditorApp {
     /// Capture Ctrl+C/Ctrl+V avant qu'egui-winit les traite comme des raccourcis
     /// du presse-papiers texte.
     pub fn queue_tile_clipboard_shortcut(&mut self, copy: bool) -> bool {
+        let has_selected_logs = self.show_log && self.log_selection_focused && self.state.log_messages.iter()
+            .any(|entry| self.selected_log_ids.contains(&entry.id));
+        if copy && has_selected_logs {
+            self.pending_log_copy = true;
+            return true;
+        }
         if !self.state.game_loop.is_editor()
             || self.toolbar.active_tool != crate::toolbar::EditorTool::Select
         {
@@ -535,7 +644,24 @@ impl EditorApp {
         true
     }
 
+    fn selected_logs_as_text(&self) -> String {
+        self.state.log_messages.iter()
+            .filter(|entry| self.selected_log_ids.contains(&entry.id))
+            .map(format_log_entry)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn draw_ui(&mut self, ctx: &Context, delta_time: f32) {
+        self.selected_log_ids.retain(|id| self.state.log_messages.iter().any(|entry| entry.id == *id));
+        let pointer_click = ctx.input(|input| {
+            (input.pointer.any_click(), input.pointer.latest_pos())
+        });
+        if let (true, Some(position)) = pointer_click {
+            if !self.log_panel_rect.is_some_and(|rect| rect.contains(position)) {
+                self.log_selection_focused = false;
+            }
+        }
         let scene_before_ui = self.state.game_loop.is_editor()
             .then(|| self.state.active_scene().to_json().ok())
             .flatten();
@@ -834,38 +960,82 @@ impl EditorApp {
 
         // ── Log en bas si activé ──────────────────────────────────────────────
         if self.show_log {
-            egui::TopBottomPanel::bottom("log_panel")
+            let response = egui::TopBottomPanel::bottom("log_panel")
                 .resizable(true)
                 .default_height(120.0)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.heading("Log");
+                        let has_selected_logs = !self.selected_log_ids.is_empty();
+                        if ui.add_enabled(has_selected_logs, egui::Button::new("📋 Copier sélection"))
+                            .clicked() {
+                            self.pending_log_copy = true;
+                            self.log_selection_focused = true;
+                        }
                         if ui.small_button("🗑 Effacer").clicked() {
                             self.state.log_messages.clear();
+                            self.selected_log_ids.clear();
+                            self.log_selection_anchor = None;
+                            self.log_selection_focused = false;
                         }
                     });
                     ui.separator();
+                    let entries: Vec<LogEntry> = self.state.log_messages.iter().cloned().collect();
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
                         .stick_to_bottom(true)
-                        .show_rows(ui, 18.0, self.state.log_messages.len(), |ui, rows| {
+                        .show_rows(ui, 18.0, entries.len(), |ui, rows| {
                             for row in rows {
-                                let entry = &self.state.log_messages[row];
+                                let entry = &entries[row];
                                 let color = match entry.level {
                                     log::Level::Error => egui::Color32::from_rgb(255, 100, 100),
                                     log::Level::Warn  => egui::Color32::from_rgb(255, 200, 80),
                                     log::Level::Info  => egui::Color32::WHITE,
                                     _                 => egui::Color32::GRAY,
                                 };
-                                let text = if entry.repetitions > 1 {
-                                    format!("{}  (répété {} fois)", entry.message, entry.repetitions)
-                                } else {
-                                    entry.message.clone()
-                                };
-                                ui.label(egui::RichText::new(text).color(color).monospace());
+                                let text = format_log_entry(entry);
+                                let selected = self.selected_log_ids.contains(&entry.id);
+                                let response = ui.selectable_label(
+                                    selected,
+                                    egui::RichText::new(text).color(color).monospace(),
+                                ).on_hover_text("Cliquer pour sélectionner ; Ctrl+C copie les lignes sélectionnées");
+                                if response.clicked() {
+                                    self.log_selection_focused = true;
+                                    let modifiers = ui.input(|input| input.modifiers);
+                                    if modifiers.shift {
+                                        if let Some(anchor) = self.log_selection_anchor
+                                            .and_then(|id| entries.iter().position(|candidate| candidate.id == id)) {
+                                            self.selected_log_ids.clear();
+                                            for index in anchor.min(row)..=anchor.max(row) {
+                                                self.selected_log_ids.insert(entries[index].id);
+                                            }
+                                        } else {
+                                            self.selected_log_ids.clear();
+                                            self.selected_log_ids.insert(entry.id);
+                                            self.log_selection_anchor = Some(entry.id);
+                                        }
+                                    } else if modifiers.ctrl || modifiers.command {
+                                        if !self.selected_log_ids.remove(&entry.id) {
+                                            self.selected_log_ids.insert(entry.id);
+                                        }
+                                        self.log_selection_anchor = Some(entry.id);
+                                    } else {
+                                        self.selected_log_ids.clear();
+                                        self.selected_log_ids.insert(entry.id);
+                                        self.log_selection_anchor = Some(entry.id);
+                                    }
+                                }
                             }
                         });
                 });
+            self.log_panel_rect = Some(response.response.rect);
+        } else {
+            self.log_panel_rect = None;
+            self.log_selection_focused = false;
+        }
+        if std::mem::take(&mut self.pending_log_copy) {
+            let text = self.selected_logs_as_text();
+            if !text.is_empty() { ctx.copy_text(text); }
         }
 
         // ── Panneau gauche ────────────────────────────────────────────────────
@@ -875,6 +1045,7 @@ impl EditorApp {
             .and_then(|path| path.canonicalize().ok());
         let active_project_file = self.project_path.as_deref()
             .and_then(|path| path.canonicalize().ok());
+        let mut tile_texture_picker = None;
         egui::SidePanel::left("left_panel")
             .resizable(true)
             .default_width(220.0)
@@ -887,6 +1058,7 @@ impl EditorApp {
                     &mut self.state.selected,
                     project_root.as_deref(),
                     active_project_file.as_deref(),
+                    &mut self.state.project.tile_definitions,
                 );
                 if self.state.selected != selection_before_panel {
                     self.scene_view.selected_object = self.state.selected;
@@ -917,6 +1089,7 @@ impl EditorApp {
                     PanelAction::DeleteObject(id) => {
                         self.pending_deletion = Some((vec![id], Vec::new()));
                     }
+                    PanelAction::ChooseTileTexture(id) => tile_texture_picker = Some(id),
                     PanelAction::AddObject => {
                         let id = self.state.active_scene_mut().spawn(
                             "Nouvel objet",
@@ -960,6 +1133,24 @@ impl EditorApp {
                 }
                 });
             });
+
+        if let Some(tile_id) = tile_texture_picker {
+            match choose_tile_texture_file() {
+                Ok(Some(path)) => match self.import_texture(&path) {
+                    Ok(stored_path) => {
+                        if let Some(tile) = self.state.project.tile_definitions.iter_mut()
+                            .find(|tile| tile.id == tile_id) {
+                            tile.texture = Some(stored_path);
+                        }
+                    }
+                    Err(error) => self.state.push_log(log::Level::Error,
+                        format!("Import de texture de tuile : {error}")),
+                },
+                Ok(None) => {}
+                Err(error) => self.state.push_log(log::Level::Error,
+                    format!("Sélecteur de texture : {error}")),
+            }
+        }
 
         // ── Inspecteur à droite ───────────────────────────────────────────────
         let mut texture_picker_object = None;
@@ -1103,8 +1294,10 @@ impl EditorApp {
             self.scene_view.show(
                 ui,
                 self.state.project.world.active_scene_mut(),
+                &self.state.project.tile_definitions,
                 self.toolbar.active_tool,
                 &asset_root,
+                delta_time,
                 fps_overlay,
                 editing_enabled,
                 grid_visible,
@@ -1249,6 +1442,43 @@ impl EditorApp {
             }
         }
 
+        let tile_texture_references: Vec<(u16, String)> = self.state.project.tile_definitions.iter()
+            .filter_map(|tile| tile.texture.as_ref().filter(|path| !path.trim().is_empty())
+                .map(|path| (tile.id, path.clone())))
+            .collect();
+        let mut tile_texture_updates = Vec::new();
+        for (tile_id, stored_path) in tile_texture_references {
+            let stored = std::path::Path::new(&stored_path);
+            let source_path = if stored.is_absolute() { stored.to_owned() } else { source_root.join(stored) };
+            let source = match source_path.canonicalize() {
+                Ok(source) => source,
+                Err(error) => {
+                    self.state.push_log(log::Level::Warn,
+                        format!("Texture de tuile manquante `{stored_path}` : {error}"));
+                    continue;
+                }
+            };
+            let relative = if let Some(relative) = copied_sources.get(&source) {
+                relative.clone()
+            } else if let Ok(within_assets) = source.strip_prefix(&target_asset_dir) {
+                let relative = asset_prefix.join(within_assets).to_string_lossy().replace('\\', "/");
+                copied_sources.insert(source, relative.clone());
+                relative
+            } else {
+                let destination = copy_asset_to_directory(&source, &target_asset_dir)?;
+                let relative = asset_prefix.join(destination.file_name().unwrap_or_default())
+                    .to_string_lossy().replace('\\', "/");
+                copied_sources.insert(source, relative.clone());
+                relative
+            };
+            tile_texture_updates.push((tile_id, relative));
+        }
+        for (tile_id, relative) in tile_texture_updates {
+            if let Some(tile) = self.state.project.tile_definitions.iter_mut().find(|tile| tile.id == tile_id) {
+                tile.texture = Some(relative);
+            }
+        }
+
         let script_references: Vec<(usize, ObjectId, String)> = self.state.project.world.scenes
             .iter().enumerate().flat_map(|(scene_index, scene)| scene.objects.values()
                 .filter_map(move |object| object.script.as_ref().filter(|value| !value.trim().is_empty())
@@ -1304,6 +1534,7 @@ impl EditorApp {
 
         let json = self.state.project.to_json()?;
         std::fs::write(&path, &json)?;
+        write_tile_definition_files(&path, &self.state.project.tile_definitions)?;
         self.project_path = Some(path.clone());
         self.remember_recent_project(&path);
         self.state.push_log(log::Level::Info, format!("Projet sauvegardé : {}", path.display()));
@@ -1375,6 +1606,11 @@ impl EditorApp {
         }
         let world_script = self.state.project.world.script.as_deref()
             .and_then(|path| remap_project_reference(path, &root, &old, &new));
+        let tile_texture_updates: Vec<(u16, String)> = self.state.project.tile_definitions.iter()
+            .filter_map(|tile| tile.texture.as_deref()
+                .and_then(|path| remap_project_reference(path, &root, &old, &new))
+                .map(|path| (tile.id, path)))
+            .collect();
 
         std::fs::rename(&old, &new)?;
         for (scene_index, object_id, asset_path, texture) in texture_updates {
@@ -1393,10 +1629,16 @@ impl EditorApp {
         if let Some(script) = world_script {
             self.state.project.world.script = Some(script);
         }
+        for (tile_id, texture) in tile_texture_updates {
+            if let Some(tile) = self.state.project.tile_definitions.iter_mut().find(|tile| tile.id == tile_id) {
+                tile.texture = Some(texture);
+            }
+        }
         self.left_panel.refresh_file_browser();
         if let Some(project_file) = self.project_path.clone() {
             let json = self.state.project.to_json()?;
             std::fs::write(&project_file, json)?;
+            write_tile_definition_files(&project_file, &self.state.project.tile_definitions)?;
             self.state.push_log(log::Level::Info,
                 format!("Références mises à jour après renommage : {}", project_file.display()));
         }
@@ -1406,8 +1648,8 @@ impl EditorApp {
     fn import_texture(&self, selected: &std::path::Path) -> anyhow::Result<String> {
         let extension = selected.extension().and_then(|value| value.to_str())
             .unwrap_or_default().to_ascii_lowercase();
-        if !matches!(extension.as_str(), "png" | "jpg" | "jpeg") {
-            anyhow::bail!("Formats acceptés : PNG et JPEG");
+        if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif") {
+            anyhow::bail!("Formats acceptés : PNG, JPEG et GIF");
         }
         let source = selected.canonicalize()?;
         assets::loader::load_image(&source)?;
@@ -1497,7 +1739,7 @@ impl EditorApp {
     /// Charge un projet complet, ou importe un ancien fichier de scène seul.
     pub fn load_scene(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         let json = std::fs::read_to_string(path)?;
-        let project = match Project::from_json(&json) {
+        let mut project = match Project::from_json(&json) {
             Ok(project) => project,
             Err(project_error) => match Scene::from_json(&json) {
                 Ok(scene) => {
@@ -1511,6 +1753,9 @@ impl EditorApp {
                 ),
             },
         };
+        if let Err(error) = load_tile_definition_files(path, &mut project) {
+            anyhow::bail!("Impossible de charger les définitions de tuiles du projet : {error}");
+        }
         self.state.project = project;
         self.state.selected = None;
         self.scene_view.selected_object = None;
@@ -1781,6 +2026,55 @@ fn project_script_prefix(project_file: &std::path::Path) -> anyhow::Result<std::
     Ok(std::path::PathBuf::from(stem).join("scripts"))
 }
 
+fn project_tile_directory(project_file: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+    let parent = project_file.parent()
+        .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?;
+    let stem = project_file.file_stem()
+        .ok_or_else(|| anyhow::anyhow!("Nom de projet invalide"))?;
+    Ok(parent.join(stem).join("tiles"))
+}
+
+fn write_tile_definition_files(
+    project_file: &std::path::Path,
+    definitions: &[world::grid::TileDefinition],
+) -> anyhow::Result<()> {
+    let directory = project_tile_directory(project_file)?;
+    std::fs::create_dir_all(&directory)?;
+    for definition in definitions {
+        let path = directory.join(format!("tile-{:05}.json", definition.id));
+        std::fs::write(path, serde_json::to_vec_pretty(definition)?)?;
+    }
+    Ok(())
+}
+
+fn load_tile_definition_files(
+    project_file: &std::path::Path,
+    project: &mut Project,
+) -> anyhow::Result<()> {
+    let directory = project_tile_directory(project_file)?;
+    if !directory.is_dir() {
+        return Ok(());
+    }
+    let mut paths = std::fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("json")))
+        .collect::<Vec<_>>();
+    paths.sort();
+    for path in paths {
+        let definition: world::grid::TileDefinition = serde_json::from_slice(&std::fs::read(&path)?)
+            .map_err(|error| anyhow::anyhow!("{} : {error}", path.display()))?;
+        anyhow::ensure!(definition.id != 0, "L'identifiant 0 est réservé à la tuile vide");
+        if let Some(existing) = project.tile_definitions.iter_mut().find(|tile| tile.id == definition.id) {
+            *existing = definition;
+        } else {
+            project.tile_definitions.push(definition);
+        }
+    }
+    project.tile_definitions.sort_by_key(|tile| tile.id);
+    Ok(())
+}
+
 fn copy_asset_to_directory(
     source: &std::path::Path,
     destination_dir: &std::path::Path,
@@ -1837,6 +2131,38 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     } else {
         Ok(Some(std::path::PathBuf::from(selected)))
     }
+}
+
+#[cfg(target_os = "windows")]
+fn choose_tile_texture_file() -> anyhow::Result<Option<std::path::PathBuf>> {
+    let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Choisir une texture de tuile'
+$dialog.Filter = 'Images PNG, JPEG ou GIF (*.png;*.jpg;*.jpeg;*.gif)|*.png;*.jpg;*.jpeg;*.gif'
+$dialog.Multiselect = $false
+$dialog.CheckFileExists = $true
+$dialog.RestoreDirectory = $true
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    [Console]::Out.Write($dialog.FileName)
+}
+"#;
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", script])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!("Le sélecteur de texture Windows a échoué : {}",
+            String::from_utf8_lossy(&output.stderr).trim());
+    }
+    let selected = String::from_utf8(output.stdout)?;
+    let selected = selected.trim();
+    if selected.is_empty() { Ok(None) } else { Ok(Some(std::path::PathBuf::from(selected))) }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn choose_tile_texture_file() -> anyhow::Result<Option<std::path::PathBuf>> {
+    anyhow::bail!("Le sélecteur natif de textures est uniquement disponible sous Windows")
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1967,4 +2293,71 @@ fn choose_project_file(_save: bool) -> anyhow::Result<Option<std::path::PathBuf>
 
 impl Default for EditorApp {
     fn default() -> Self { Self::new() }
+}
+
+#[cfg(test)]
+mod collision_and_tile_file_tests {
+    use super::*;
+    use world::{
+        coords::TilePos,
+        grid::{TileData, TileDefinition},
+        object::{ObjectType, TileSize},
+    };
+
+    #[test]
+    fn collidable_movement_is_blocked_by_solid_tile() {
+        let mut scene = Scene::new("Tile collision");
+        let id = scene.spawn("Player", ObjectType::Character, TilePos::new(0, 0));
+        scene.get_object_mut(id).unwrap().has_collisions = true;
+        scene.set_tile(TilePos::new(1, 0), TileData::terrain(7));
+        let mut definition = TileDefinition::new(7, "Wall", [100, 100, 100, 255]);
+        definition.has_collisions = true;
+
+        let moved = move_object_with_collisions(&mut scene, &[definition], id, TilePos::new(1, 0)).unwrap();
+        assert!(!moved);
+        assert_eq!(scene.get_object(id).unwrap().tile_pos, TilePos::new(0, 0));
+    }
+
+    #[test]
+    fn collidable_movement_respects_object_footprints_and_elevation() {
+        let mut scene = Scene::new("Object collision");
+        let player_id = scene.spawn("Player", ObjectType::Character, TilePos::new(0, 0));
+        let player = scene.get_object_mut(player_id).unwrap();
+        player.has_collisions = true;
+        player.footprint = TileSize::new(2, 1);
+        let obstacle_id = scene.spawn("Crate", ObjectType::Building, TilePos::new(3, 0));
+        scene.get_object_mut(obstacle_id).unwrap().has_collisions = true;
+
+        assert!(!move_object_with_collisions(
+            &mut scene, &[], player_id, TilePos::new(2, 0),
+        ).unwrap());
+        assert!(move_object_with_collisions(
+            &mut scene, &[], player_id, TilePos::with_z(2, 0, 1),
+        ).unwrap());
+        assert_eq!(scene.get_object(player_id).unwrap().tile_pos, TilePos::with_z(2, 0, 1));
+    }
+
+    #[test]
+    fn tile_definition_files_are_project_scoped_and_loaded_over_embedded_defaults() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("isomaker_tiles_{}_{}", std::process::id(), nonce));
+        std::fs::create_dir_all(&root).unwrap();
+        let project_file = root.join("sample.isomaker");
+        let mut source = Project::new("Sample");
+        let mut definition = TileDefinition::new(7, "Animated wall", [10, 20, 30, 255]);
+        definition.texture = Some("sample/assets/wall.gif".to_owned());
+        definition.has_collisions = true;
+        definition.randomize_texture_rotation = true;
+        source.tile_definitions.push(definition.clone());
+
+        write_tile_definition_files(&project_file, &source.tile_definitions).unwrap();
+        let mut loaded = Project::new("Sample");
+        load_tile_definition_files(&project_file, &mut loaded).unwrap();
+        assert_eq!(loaded.tile_definitions.iter().find(|tile| tile.id == 7), Some(&definition));
+        assert!(project_tile_directory(&project_file).unwrap().join("tile-00007.json").exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -34,6 +34,11 @@ complet prêt au déploiement.
   remplissage de zones contiguës ou de la sélection, annulation et
   rétablissement. En Lecture et en
   Pause, les commandes d'édition sont bloquées pour laisser le clavier au jeu.
+- **Tuiles personnalisées** : chaque projet démarre avec les six terrains
+  historiques et peut ajouter ses propres tuiles. Leur nom, couleur, texture
+  PNG/JPEG ou GIF animé, collision et rotation pseudo-aléatoire de la texture
+  sont enregistrés dans le projet et dans ses fichiers `tiles/`; les textures
+  sont importées dans les assets propres au projet.
 - **Copier/coller de tuiles** : avec l'outil Sélection, `Ctrl+C` copie la tuile
   seule sélectionnée et `Ctrl+V` la colle sur la tuile sélectionnée.
 - **Historique** : `Ctrl+Z` annule et `Ctrl+Y` rétablit la dernière modification
@@ -43,6 +48,8 @@ complet prêt au déploiement.
   annule.
 - **Logs Python** : les messages normaux, avertissements et erreurs indiquent
   le fichier script d'origine et le nom de l'objet si le script y est attaché.
+  Les lignes peuvent être sélectionnées, puis copiées avec `Ctrl+C` ou le bouton
+  **Copier sélection** ; `Shift` étend la sélection et `Ctrl` bascule une ligne.
 - **Projets récents** : le menu **Fichier → Projets récents** permet de rouvrir
   les dix derniers projets ouverts ou enregistrés. La liste est persistante.
 - **Raccourcis de simulation** : `F9` lance/reprend, `F10` arrête et `F11` met
@@ -68,6 +75,11 @@ complet prêt au déploiement.
   physique, script et propriétés personnalisées. Les outils de la barre
   supérieure utilisent des icônes vectorielles dessinées par l'interface, avec
   leurs libellés conservés.
+- **Collisions de grille** : en Lecture, les déplacements des scripts sont
+  bloqués par les tuiles et objets solides à la même élévation lorsque le mobile
+  et l'obstacle ont tous deux les collisions activées. Le calcul utilise les
+  empreintes rectangulaires ; formes libres, poussée et événements de contact
+  restent à faire.
 - **Modèle de bâtiments** : modules et prefabs peuvent être instanciés. La
   maison intégrée existe comme exemple ; ses textures se choisissent dans les
   propriétés plutôt que d'être assignées automatiquement.
@@ -105,8 +117,6 @@ complet prêt au déploiement.
   seule, mais pas encore l'état global du monde, les entrées souris ou les
   événements ; le débogage interactif et les permissions de scripts tiers
   restent à concevoir.
-- Les collisions sont une propriété des objets ; la simulation physique et la
-  résolution des collisions ne sont pas encore implémentées.
 - Le format projet est en version 1. Les migrations entre versions restent à
   définir si le schéma évolue.
 
@@ -118,8 +128,8 @@ complet prêt au déploiement.
    et événements de jeu, en gardant les échanges groupés par callback.
 3. Finaliser l'exécution autonome du jeu, le débogage des scripts et la
    séparation entre éditeur et runtime.
-4. Définir les besoins de physique/collision, puis implémenter une première
-   détection exploitable par les scripts.
+4. Étendre les collisions avec des formes libres, la résolution de poussée et
+   des événements de contact exploitables par les scripts.
 5. Ajouter une interface pour les dimensions de tuile et décider quels réglages
    de vue doivent être sauvegardés.
 6. Définir une stratégie de migration et de validation pour les versions
@@ -129,11 +139,19 @@ L'ordre peut changer selon les besoins exprimés pendant le développement.
 
 ## Vérification
 
-Pour la préparation de release du 29 octobre 2026 :
+Préparation de release du 29 octobre 2026 :
 
 - `cargo check --workspace` : réussi, sans avertissement.
 - `cargo build --release -p editor` : réussi.
 - `cargo test --workspace` : 24 tests réussis.
+- `python -m unittest discover -s python/tests -v` : 5 tests réussis.
+
+Après l'ajout des tests pour les tuiles personnalisées et animées :
+
+- `cargo check --workspace` : réussi, sans avertissement.
+- `cargo build --release -p editor` : réussi.
+- `cargo test --workspace` : 30 tests réussis dans un répertoire de build
+  distinct pour éviter le verrou Windows sur `target/debug/editor.exe`.
 - `python -m unittest discover -s python/tests -v` : 5 tests réussis.
 
 ## Lancer l'éditeur

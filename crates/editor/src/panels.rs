@@ -6,6 +6,7 @@ use egui::Ui;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use world::{
+    grid::TileDefinition,
     object::ObjectId,
     prefab::{BuildingModuleKind, Prefab},
     scene::Scene,
@@ -91,9 +92,8 @@ impl LeftPanel {
         current_selection: &mut Option<ObjectId>,
         project_root: Option<&Path>,
         active_project_file: Option<&Path>,
+        tile_definitions: &mut Vec<TileDefinition>,
     ) -> PanelAction {
-        let mut action = PanelAction::None;
-
         // ── Onglets ──────────────────────────────────────────────────────────
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.tab, LeftPanelTab::Hierarchy, "📋 Scène");
@@ -103,20 +103,20 @@ impl LeftPanel {
         });
         ui.separator();
 
-        match self.tab {
+        let action = match self.tab {
             LeftPanelTab::Hierarchy => {
-                action = self.show_hierarchy(ui, scene, current_selection);
+                self.show_hierarchy(ui, scene, current_selection)
             }
             LeftPanelTab::Tiles => {
-                self.show_tile_palette(ui);
+                self.show_tile_palette(ui, tile_definitions)
             }
             LeftPanelTab::Prefabs => {
-                action = self.show_prefabs(ui);
+                self.show_prefabs(ui)
             }
             LeftPanelTab::Assets => {
-                action = self.show_assets(ui, project_root, active_project_file);
+                self.show_assets(ui, project_root, active_project_file)
             }
-        }
+        };
 
         action
     }
@@ -175,33 +175,70 @@ impl LeftPanel {
     }
 
     /// Palette de tuiles : sélecteur du type à peindre.
-    fn show_tile_palette(&mut self, ui: &mut Ui) {
-        ui.label("Palette de terrain :");
+    fn show_tile_palette(&mut self, ui: &mut Ui, tiles: &mut Vec<TileDefinition>) -> PanelAction {
+        let mut action = PanelAction::None;
+        ui.label("Tuiles du projet");
         ui.separator();
-
-        let tiles = [
-            (1u16, "🟢 Herbe",    egui::Color32::from_rgb(80, 140, 70)),
-            (2,    "🔵 Eau",      egui::Color32::from_rgb(60, 100, 160)),
-            (3,    "🟡 Sable",    egui::Color32::from_rgb(160, 140, 100)),
-            (4,    "🟤 Terre",    egui::Color32::from_rgb(100, 90, 80)),
-            (5,    "⬜ Pierre",   egui::Color32::from_rgb(130, 130, 130)),
-            (6,    "🟠 Désert",   egui::Color32::from_rgb(200, 180, 140)),
-        ];
-
         egui::Grid::new("tile_palette")
             .num_columns(2)
             .spacing([4.0, 4.0])
             .show(ui, |ui| {
-                for (tile_type, label, color) in &tiles {
-                    let selected = self.selected_tile_type == *tile_type;
-                    let text = egui::RichText::new(*label)
-                        .color(if selected { *color } else { egui::Color32::GRAY });
-                    if ui.selectable_label(selected, text).clicked() {
-                        self.selected_tile_type = *tile_type;
+                for tile in tiles.iter() {
+                    let selected = self.selected_tile_type == tile.id;
+                    let color = egui::Color32::from_rgba_unmultiplied(
+                        tile.color[0], tile.color[1], tile.color[2], tile.color[3],
+                    );
+                    let label = format!("{} {}", if tile.texture.is_some() { "▧" } else { "◆" }, tile.name);
+                    if ui.selectable_label(selected, egui::RichText::new(label)
+                        .color(if selected { color } else { egui::Color32::GRAY })).clicked() {
+                        self.selected_tile_type = tile.id;
                     }
                     ui.end_row();
                 }
             });
+
+        let next_id = (1..=u16::MAX).find(|id| !tiles.iter().any(|tile| tile.id == *id));
+        if ui.add_enabled(next_id.is_some(), egui::Button::new("＋ Ajouter une tuile personnalisée")).clicked() {
+            if let Some(id) = next_id {
+                tiles.push(TileDefinition::new(id, format!("Tuile {id}"), [120, 120, 140, 255]));
+                self.selected_tile_type = id;
+            }
+        }
+
+        if let Some(tile) = tiles.iter_mut().find(|tile| tile.id == self.selected_tile_type) {
+            ui.separator();
+            ui.label(egui::RichText::new("Propriétés de la tuile").strong());
+            ui.horizontal(|ui| {
+                ui.label("Nom");
+                ui.text_edit_singleline(&mut tile.name);
+            });
+            let mut color = egui::Color32::from_rgba_unmultiplied(
+                tile.color[0], tile.color[1], tile.color[2], tile.color[3],
+            );
+            ui.horizontal(|ui| {
+                ui.label("Couleur");
+                if ui.color_edit_button_srgba(&mut color).changed() {
+                    tile.color = [color.r(), color.g(), color.b(), color.a()];
+                }
+            });
+            ui.checkbox(&mut tile.has_collisions, "Collisions activées");
+            ui.checkbox(&mut tile.randomize_texture_rotation, "Orientation de texture aléatoire");
+            ui.horizontal(|ui| {
+                if ui.button("Choisir une texture…").clicked() {
+                    action = PanelAction::ChooseTileTexture(tile.id);
+                }
+                if tile.texture.is_some() && ui.small_button("Retirer").clicked() {
+                    tile.texture = None;
+                }
+            });
+            if let Some(texture) = &tile.texture {
+                ui.label(egui::RichText::new(texture).small().weak());
+            } else {
+                ui.label(egui::RichText::new("Aucune texture").small().weak());
+            }
+            ui.label(egui::RichText::new(format!("ID : {}", tile.id)).small().weak());
+        }
+        action
     }
 
     /// Panneau de construction modulaire et préfabriqués.
@@ -497,4 +534,5 @@ pub enum PanelAction {
     InstantiatePrefab(Prefab),
     SelectObject(ObjectId),
     DeleteObject(ObjectId),
+    ChooseTileTexture(u16),
 }

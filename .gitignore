@@ -47,3 +47,5 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+/projects/

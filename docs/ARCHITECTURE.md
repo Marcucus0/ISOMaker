@@ -48,7 +48,15 @@ Project (un monde)
 ```
 
 Un projet porte une version de format. Chaque scène contient ses dimensions de
-tuile, sa grille et ses objets. La grille est clairsemée : seules les données
+tuile, sa grille et ses objets. Le projet possède aussi sa palette de tuiles :
+les six types historiques sont fournis par défaut et les définitions ajoutées
+sont propres au projet. Elles sont sérialisées dans `.isomaker` et écrites dans
+`<projet>/tiles/tile-<id>.json`. Une définition contient son identifiant, son
+nom, sa couleur, une texture facultative (PNG, JPEG ou GIF animé), un indicateur
+de collision et une option de rotation pseudo-aléatoire de la texture par case. Les
+textures sont importées dans les assets du projet. La collision est une
+métadonnée utilisée pendant les déplacements en Lecture.
+La grille est clairsemée : seules les données
 non vides sont réparties dans des chunks de 16 × 16 tuiles. Les objets ont un
 identifiant stable, une position logique, une empreinte, une couche, des
 propriétés et, éventuellement, un chemin de texture. Le script Python est
@@ -65,11 +73,13 @@ Les textures sont copiées dans un dossier propre au projet, voisin du fichier :
 ```text
 mon_projet.isomaker
 mon_projet/
-└── assets/
-    └── textures choisies par l'utilisateur
+├── assets/
+│   └── textures choisies par l'utilisateur
+└── tiles/
+    └── tile-00007.json
 ```
 
-Les objets enregistrent un chemin relatif de la forme
+Les objets et les tuiles enregistrent un chemin relatif de la forme
 `mon_projet/assets/nom.ext`, résolu depuis le dossier contenant le fichier
 `.isomaker`. Au premier enregistrement, les textures référencées sont copiées
 dans ce dossier et les chemins du projet sont actualisés. Une texture choisie
@@ -81,8 +91,8 @@ Assets est un gestionnaire de fichiers enraciné dans le dossier `<nom_du_projet
 et les autres fichiers du projet. Un double-clic ouvre un fichier avec son application
 Windows par défaut. Les menus contextuels permettent de créer des fichiers et
 dossiers ainsi que de renommer les éléments. Un renommage met à jour les
-chemins de texture des objets, leur propriété `texture`, les scripts d'objets
-et le script du monde, puis sauvegarde le projet.
+chemins de texture des objets et des tuiles, la propriété `texture` des objets,
+les scripts d'objets et le script du monde, puis sauvegarde le projet.
 
 Le script Python du monde suit le même principe de portabilité : la fenêtre
 **Monde → Script du monde** copie le fichier choisi dans le dossier
@@ -190,6 +200,13 @@ tuile. Si elle est désactivée, l'image conserve son ratio et est contenue dans
 le rectangle de la tuile. Les objets sans texture valide utilisent un rendu de
 substitution et les textures chargées sont gardées en cache par la vue.
 
+Pendant Lecture, un déplacement demandé par un script vérifie les collisions
+si l'objet déplacé est solide. Il ne peut pas entrer dans une tuile dont le type
+est solide, ni recouvrir un autre objet solide à la même élévation ; les deux
+objets doivent avoir les collisions activées. Les empreintes rectangulaires sont
+prises en compte. Un déplacement bloqué est ignoré silencieusement. Cette
+première version ne calcule pas de poussée et n'émet pas d'événement de contact.
+
 Le contenu de la case « Ajuster » est sérialisé sur l'objet. Les anciens objets
 qui n'ont pas ce champ sont chargés avec la valeur par défaut `true`.
 
@@ -243,7 +260,11 @@ Chaque log Python affiche le nom de son fichier script et, pour un script
 d'objet, le nom de l'objet auquel il est attaché. Les logs d'information restent
 dans le panneau de l'éditeur, où les doublons consécutifs sont regroupés, pour
 éviter les écritures console synchrones par frame ; les avertissements et
-erreurs sont aussi transmis au logger natif avec cette origine.
+erreurs sont aussi transmis au logger natif avec cette origine. Les lignes du
+panneau peuvent être sélectionnées : `Shift` étend la sélection, `Ctrl` bascule
+une ligne et `Ctrl+C` ou le bouton de copie place les logs sélectionnés dans le
+presse-papiers. Le raccourci est associé au panneau Log ; ailleurs, `Ctrl+C`
+conserve son comportement habituel.
 
 L'API permet entre autres de créer, déplacer ou supprimer des objets, de changer
 des propriétés, de lire l'état clavier et d'écrire dans les logs. Les scripts

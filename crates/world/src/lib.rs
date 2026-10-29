@@ -16,6 +16,7 @@ pub mod project;
 
 pub use coords::{TilePos, ScreenPos, IsoProjection};
 pub use grid::TileGrid;
+pub use grid::TileDefinition;
 pub use layer::Layer;
 pub use object::{ObjectId, SceneObject, ObjectType, Rotation4};
 pub use scene::Scene;

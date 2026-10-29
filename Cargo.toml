@@ -22,7 +22,7 @@ egui-wgpu = "0.29"
 egui-winit = "0.29"
 
 # Images
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
 # Sérialisation
 serde = { version = "1", features = ["derive"] }

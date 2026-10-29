@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::scene::Scene;
+use crate::{grid::{default_tile_definitions, TileDefinition}, scene::Scene};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct World {
@@ -56,6 +56,9 @@ pub struct Project {
     pub name: String,
     /// A project owns exactly one world; scenes are collected by that world.
     pub world: World,
+    /// Définitions de tuiles isolées dans ce projet.
+    #[serde(default = "default_tile_definitions")]
+    pub tile_definitions: Vec<TileDefinition>,
 }
 
 impl Project {
@@ -64,6 +67,7 @@ impl Project {
             format_version: 1,
             name: name.into(),
             world: World::new("Monde principal"),
+            tile_definitions: default_tile_definitions(),
         }
     }
 
@@ -79,6 +83,11 @@ impl Project {
             project.world.active_scene_index < project.world.scenes.len(),
             "L'indice de la scène active est invalide"
         );
+        let mut tile_ids = std::collections::HashSet::new();
+        for tile in &project.tile_definitions {
+            anyhow::ensure!(tile.id != 0, "L'identifiant 0 est réservé à la tuile vide");
+            anyhow::ensure!(tile_ids.insert(tile.id), "Identifiant de tuile dupliqué : {}", tile.id);
+        }
         Ok(project)
     }
 }
@@ -130,5 +139,24 @@ mod tests {
         let restored: crate::object::SceneObject = serde_json::from_value(value).unwrap();
         assert!(restored.camera_interpolation);
         assert_eq!(restored.camera_interpolation_speed, 8.0);
+    }
+
+    #[test]
+    fn custom_tile_properties_roundtrip_with_project_and_old_projects_get_defaults() {
+        let mut project = Project::new("Custom tiles");
+        let mut tile = crate::grid::TileDefinition::new(7, "Animated grass", [20, 180, 70, 255]);
+        tile.texture = Some("custom_tiles/assets/grass.gif".to_owned());
+        tile.has_collisions = true;
+        tile.randomize_texture_rotation = true;
+        project.tile_definitions.push(tile.clone());
+
+        let saved = project.to_json().unwrap();
+        let loaded = Project::from_json(&saved).unwrap();
+        assert_eq!(loaded.tile_definitions.last(), Some(&tile));
+
+        let mut legacy = serde_json::to_value(Project::new("Legacy project")).unwrap();
+        legacy.as_object_mut().unwrap().remove("tile_definitions");
+        let loaded_legacy = Project::from_json(&legacy.to_string()).unwrap();
+        assert_eq!(loaded_legacy.tile_definitions, default_tile_definitions());
     }
 }

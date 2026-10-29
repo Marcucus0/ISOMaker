@@ -126,7 +126,7 @@ ne signifie pas qu'il est déjà exposé à Python.
 | Nom (`name`) | Modifiable | `game.name` en lecture ; `set_self_property("name", valeur)` pour l'écriture. |
 | Type (`object_type`) | Affiché (`Building`, `Character`, `Item`, `Decoration`, `Camera`, `Tile` ou type personnalisé) | `game.object_type` en lecture seule. |
 | Position (`tile_pos`) | Coordonnées X, Y et élévation Z | `game.x`, `game.y`, `game.z` en lecture ; `set_self_property("x"/"y"/"z", entier)` ou `move_self(x, y)` pour déplacer. |
-| Collisions (`has_collisions`) | Case à cocher pour les objets autres que les caméras | `game.has_collisions` en lecture ; `set_self_property("has_collisions", bool)` pour l'écriture. La simulation de collisions reste à implémenter. |
+| Collisions (`has_collisions`) | Case à cocher sur les objets | `game.has_collisions` en lecture ; `set_self_property("has_collisions", bool)` pour l'écriture. |
 | Masqué (`hidden`) | Case à cocher, désactivée par défaut | `game.hidden` en lecture ; `set_self_property("hidden", bool)` pour l'écriture. |
 | Texture (`asset_path`, propriété `texture`) | Fichier image sélectionnable pour les objets autres que les caméras | `game.texture` en lecture ; `set_self_property("texture", chemin)` ou `None` pour l'écriture. |
 | Ajuster la texture (`fit_texture_to_diamond`) | Case à cocher, activée par défaut pour les objets autres que les caméras | `game.fit_texture_to_diamond` en lecture ; `set_self_property("fit_texture_to_diamond", bool)` pour l'écriture. |
@@ -173,6 +173,15 @@ nouveau script sera chargé au prochain lancement.
 `move_self(x, y)` demande un déplacement sur la grille, `destroy_self()` demande
 la suppression, et `set_self_property(key, value)` modifie un champ intégré ou
 une propriété personnalisée.
+
+En Lecture, `move_self` et les changements de position X/Y/Z par
+`set_self_property` respectent les collisions de grille. Le déplacement est
+refusé si l'objet courant a `has_collisions=True` et que sa destination recouvre
+une tuile solide ou l'empreinte d'un autre objet solide à la même élévation.
+L'autre objet doit aussi avoir ses collisions activées. Les tuiles solides se
+configurent dans les propriétés de leur définition. Un déplacement bloqué est
+ignoré silencieusement. La détection utilise des empreintes rectangulaires
+et ne génère pas encore d'événement de contact.
 Comme les autres commandes, leurs effets sont appliqués après le callback.
 Dans un script du monde, `game.object_id` vaut `None` et les trois méthodes
 `*_self` lèvent une erreur ; utilisez alors les méthodes prenant un UUID explicite.
@@ -316,7 +325,8 @@ menu **Monde** utilise les hooks préfixés par `_on_` ci-dessus. Les exceptions
 Python sont remontées dans le journal de l'éditeur avec le chemin et le nom du
 hook.
 
-L'API ne fournit pas encore la lecture des objets et de leurs propriétés, la
-lecture des variables globales, les entrées souris, les événements de jeu, ni
-le retour d'identifiant de `spawn`. Elle ne constitue pas une sandbox :
+L'API fournit des instantanés en lecture seule des objets et de leurs champs,
+mais pas la lecture/écriture de variables globales, les entrées souris, ni les
+événements de jeu. `spawn` ne renvoie pas l'identifiant créé. L'API ne constitue
+pas une sandbox :
 les scripts chargés sont du code Python de confiance.
