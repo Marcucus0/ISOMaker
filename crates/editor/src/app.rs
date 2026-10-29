@@ -11,6 +11,7 @@ use engine::InputState;
 use serde::{Deserialize, Serialize};
 use scripting::{ScriptRuntime, GameCommand};
 use std::collections::{HashSet, VecDeque};
+use std::sync::mpsc::{Receiver, TryRecvError};
 use world::{
     object::{ObjectId, ObjectType},
     project::Project,
@@ -167,19 +168,40 @@ impl EditorState {
     /// Appelé chaque frame pendant Playing.
     pub fn update(&mut self, delta_time: f32) {
         if !self.game_loop.is_simulating() { return; }
-        match self.script_runtime.call_update(delta_time) {
-            Ok(cmds) => self.apply_commands(cmds),
-            Err(e) => self.push_log(log::Level::Error, format!("on_update : {e}")),
+        if self.script_runtime.has_legacy_update() {
+            match self.script_runtime.call_update(delta_time) {
+                Ok(cmds) => self.apply_commands(cmds),
+                Err(e) => self.push_log(log::Level::Error, format!("on_update : {e}")),
+            }
         }
-        let objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
-        match self.script_runtime.call_world_update(delta_time, &self.input, &objects) {
-            Ok(cmds) => self.apply_commands(cmds),
-            Err(e) => self.push_log(log::Level::Error, format!("_on_update : {e}")),
+
+        let has_world_update = self.script_runtime.has_world_update();
+        let has_object_update = self.script_runtime.has_object_update();
+        if !has_world_update && !has_object_update {
+            return;
         }
-        let objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
-        match self.script_runtime.call_object_update(delta_time, &objects, &self.input) {
-            Ok(cmds) => self.apply_commands(cmds),
-            Err(e) => self.push_log(log::Level::Error, format!("Script objet _on_update : {e}")),
+
+        let mut objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
+        let mut world_changed_scene = false;
+        if has_world_update {
+            match self.script_runtime.call_world_update(delta_time, &self.input, &objects) {
+                Ok(cmds) => {
+                    world_changed_scene = !cmds.is_empty();
+                    self.apply_commands(cmds);
+                }
+                Err(e) => self.push_log(log::Level::Error, format!("_on_update : {e}")),
+            }
+        }
+        if has_object_update {
+            // World commands are applied before object hooks, so refresh only
+            // when they changed the scene. Otherwise reuse this frame snapshot.
+            if world_changed_scene {
+                objects = self.active_scene().objects.values().cloned().collect();
+            }
+            match self.script_runtime.call_object_update(delta_time, &objects, &self.input) {
+                Ok(cmds) => self.apply_commands(cmds),
+                Err(e) => self.push_log(log::Level::Error, format!("Script objet _on_update : {e}")),
+            }
         }
     }
 
@@ -549,6 +571,10 @@ pub struct EditorApp {
     pending_log_copy: bool,
     /// Chemin du projet courant pour la sauvegarde.
     project_path: Option<std::path::PathBuf>,
+    /// Le player charge un projet directement en lecture et masque l'UI d'édition.
+    player_mode: bool,
+    export_receiver: Option<Receiver<Result<std::path::PathBuf, String>>>,
+    export_status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -599,11 +625,39 @@ impl EditorApp {
             log_panel_rect: None,
             pending_log_copy: false,
             project_path: None,
+            player_mode: false,
+            export_receiver: None,
+            export_status: None,
+        }
+    }
+
+    /// Charge un projet et démarre directement sa simulation sans interface d'édition.
+    pub fn new_player(path: &std::path::Path) -> anyhow::Result<Self> {
+        let path = path.canonicalize()?;
+        let mut app = Self::new();
+        app.player_mode = true;
+        app.show_log = false;
+        app.load_scene(&path)?;
+        app.load_world_script()?;
+        app.load_object_scripts()?;
+        app.runtime_camera = app.state.active_scene().main_camera;
+        app.state.play();
+        Ok(app)
+    }
+
+    pub fn is_player_mode(&self) -> bool {
+        self.player_mode
+    }
+
+    pub fn shutdown_player(&mut self) {
+        if self.player_mode {
+            self.state.stop();
         }
     }
 
     /// Appelé à chaque frame par la boucle winit.
     pub fn update(&mut self, ctx: &Context, delta_time: f32) {
+        self.poll_export_job();
         if delta_time.is_finite() && delta_time > 0.0 {
             let instantaneous = 1.0 / delta_time;
             self.fps_estimate = if self.fps_estimate == 0.0 {
@@ -615,6 +669,11 @@ impl EditorApp {
         // Met à jour la simulation si en cours.
         self.state.update(delta_time);
 
+        if self.player_mode {
+            self.update_player_view(ctx, delta_time);
+            return;
+        }
+
         // Synchronise la sélection avec la vue scène.
         self.scene_view.selected_object = self.state.selected;
         // Synchronise le type de tuile depuis la palette.
@@ -624,6 +683,82 @@ impl EditorApp {
 
         // Récupère la sélection de la vue scène.
         self.state.selected = self.scene_view.selected_object;
+    }
+
+    fn poll_export_job(&mut self) {
+        let result = match self.export_receiver.as_ref().map(Receiver::try_recv) {
+            Some(Ok(result)) => Some(result),
+            Some(Err(TryRecvError::Disconnected)) => Some(Err("Le processus d'export s'est interrompu.".into())),
+            Some(Err(TryRecvError::Empty)) | None => None,
+        };
+        let Some(result) = result else { return };
+        self.export_receiver = None;
+        self.show_log = true;
+        match result {
+            Ok(path) => {
+                let size = std::fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
+                let message = format!("Export correctement terminé : {} ({size} octets)", path.display());
+                self.export_status = Some(message.clone());
+                self.state.push_log(log::Level::Info, message);
+            }
+            Err(error) => {
+                let message = format!("Échec de l'export : {error}");
+                self.export_status = Some(message.clone());
+                self.state.push_log(log::Level::Error, message);
+            }
+        }
+    }
+
+    fn update_player_view(&mut self, ctx: &Context, delta_time: f32) {
+        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        let camera_pose = self.runtime_camera.and_then(|id| {
+            self.state.active_scene().get_object(id)
+                .filter(|object| object.object_type == ObjectType::Camera)
+                .map(|object| (
+                    object.tile_pos,
+                    object.camera_zoom,
+                    object.camera_interpolation,
+                    object.camera_interpolation_speed,
+                ))
+        });
+        if let Some((tile_pos, zoom, interpolation, interpolation_speed)) = camera_pose {
+            let position = self.state.active_scene().projection().tile_to_screen(tile_pos);
+            let target_position = egui::vec2(position.x, position.y);
+            let target_zoom = zoom.clamp(0.1, 10.0);
+            let blend = if interpolation {
+                1.0 - (-interpolation_speed.clamp(0.1, 20.0) * delta_time.max(0.0)).exp()
+            } else {
+                1.0
+            };
+            let camera_position = self.runtime_camera_position.get_or_insert(target_position);
+            *camera_position += (target_position - *camera_position) * blend;
+            let camera_zoom = self.runtime_camera_zoom.get_or_insert(target_zoom);
+            *camera_zoom += (target_zoom - *camera_zoom) * blend;
+            self.scene_view.camera.position = *camera_position;
+            self.scene_view.camera.zoom = *camera_zoom;
+        }
+
+        let asset_root = self.project_path.as_ref()
+            .and_then(|path| path.parent())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default();
+        egui::CentralPanel::default().frame(egui::Frame::default()).show(ctx, |ui| {
+            self.scene_view.show(
+                ui,
+                self.state.project.world.active_scene_mut(),
+                &self.state.project.tile_definitions,
+                crate::toolbar::EditorTool::Select,
+                &asset_root,
+                delta_time,
+                None,
+                false,
+                false,
+                false,
+                &mut self.runtime_camera,
+            );
+        });
     }
 
     /// Capture Ctrl+C/Ctrl+V avant qu'egui-winit les traite comme des raccourcis
@@ -712,6 +847,7 @@ impl EditorApp {
         let recent_projects: Vec<std::path::PathBuf> = self.editor_settings.recent_projects.iter()
             .map(std::path::PathBuf::from)
             .collect();
+        let export_in_progress = self.export_receiver.is_some();
         let active_scene_index = self.state.project.world.active_scene_index;
         // ── Barre d'outils ────────────────────────────────────────────────────
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
@@ -723,6 +859,7 @@ impl EditorApp {
                 &scene_names,
                 active_scene_index,
                 &recent_projects,
+                export_in_progress,
             );
             if self.toolbar.undo_requested && self.state.game_loop.mode == EngineMode::Editor {
                 self.state.undo();
@@ -756,7 +893,7 @@ impl EditorApp {
                         if mode_before == EngineMode::Editor {
                             match self.load_world_script() {
                                 Ok(()) => {
-                                    self.load_object_scripts();
+                                    let _ = self.load_object_scripts();
                                     self.show_world_settings = false;
                                     self.runtime_camera = self.state.active_scene().main_camera;
                                     self.runtime_camera_position = None;
@@ -784,6 +921,10 @@ impl EditorApp {
                 }
             }
         });
+
+        if self.toolbar.export_requested && self.state.game_loop.is_editor() {
+            self.export_current_project();
+        }
 
         if self.toolbar.world_settings_requested {
             self.show_world_settings = true;
@@ -950,6 +1091,10 @@ impl EditorApp {
                 ui.label(format!("Zoom : {:.1}×", self.scene_view.camera.zoom));
                 ui.separator();
                 ui.checkbox(&mut self.scene_view.options.show_grid, "Grille");
+                if let Some(status) = &self.export_status {
+                    ui.separator();
+                    ui.label(status);
+                }
 
                 // Toggle log.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1301,6 +1446,7 @@ impl EditorApp {
                 fps_overlay,
                 editing_enabled,
                 grid_visible,
+                true,
                 &mut self.runtime_camera,
             );
         });
@@ -1541,6 +1687,87 @@ impl EditorApp {
         Ok(())
     }
 
+    fn export_current_project(&mut self) {
+        if self.export_receiver.is_some() {
+            return;
+        }
+        if !self.state.project.world.script.as_ref().is_some_and(|script| !script.trim().is_empty()) {
+            self.state.push_log(log::Level::Error,
+                "Export impossible : définis d'abord le script du monde dans le menu Monde.".into());
+            return;
+        }
+
+        let project_path = if let Some(path) = self.project_path.clone() {
+            path
+        } else {
+            match choose_project_file(true) {
+                Ok(Some(path)) => path,
+                Ok(None) => return,
+                Err(error) => {
+                    self.state.push_log(log::Level::Error, format!("Sélecteur de projet : {error}"));
+                    return;
+                }
+            }
+        };
+        let stem = project_path.file_stem().and_then(|name| name.to_str()).unwrap_or("jeu");
+        let default_zip_name = format!("{stem}-windows.zip");
+        let output_path = match choose_export_file(&default_zip_name) {
+            Ok(Some(path)) => path,
+            Ok(None) => return,
+            Err(error) => {
+                self.state.push_log(log::Level::Error, format!("Sélecteur d'export : {error}"));
+                return;
+            }
+        };
+        if let Err(error) = self.save_scene(&project_path) {
+            self.state.push_log(log::Level::Error, format!("Sauvegarde avant export : {error}"));
+            return;
+        }
+        let project_path = self.project_path.clone().unwrap_or(project_path);
+        let script_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/export_game.py");
+        if !script_path.is_file() {
+            self.state.push_log(log::Level::Error, format!(
+                "Script d'export introuvable : {}", script_path.display()));
+            return;
+        }
+
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.export_receiver = Some(receiver);
+        self.export_status = Some("Export du jeu en cours…".into());
+        self.show_log = true;
+        self.state.push_log(log::Level::Info, format!(
+            "Export du jeu démarré : {} → {}", project_path.display(), output_path.display()));
+        std::thread::spawn(move || {
+            let result = std::process::Command::new("python")
+                .arg(script_path)
+                .arg(&project_path)
+                .arg("--output")
+                .arg(&output_path)
+                .env("PYTHONIOENCODING", "utf-8")
+                .output()
+                .map_err(|error| format!("Impossible de lancer Python : {error}"))
+                .and_then(|output| {
+                    if output.status.success() {
+                        match std::fs::metadata(&output_path) {
+                            Ok(metadata) if metadata.is_file() && metadata.len() > 0 => Ok(output_path),
+                            Ok(_) => Err(format!("L'exporteur n'a pas produit d'archive valide : {}", output_path.display())),
+                            Err(error) => Err(format!("Archive annoncée comme exportée mais introuvable : {error}")),
+                        }
+                    } else {
+                        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+                        let mut details = Vec::new();
+                        if !stdout.is_empty() { details.push(format!("stdout: {stdout}")); }
+                        if !stderr.is_empty() { details.push(format!("stderr: {stderr}")); }
+                        if details.is_empty() { details.push("aucun détail fourni par l'exporteur".into()); }
+                        Err(format!("{} (code {:?})", details.join(" | "), output.status.code()))
+                    }
+                });
+            let _ = sender.send(result);
+        });
+    }
+
     fn save_editor_settings(&self) -> anyhow::Result<()> {
         let path = editor_settings_path()?;
         let parent = path.parent().ok_or_else(|| anyhow::anyhow!("Dossier de configuration introuvable"))?;
@@ -1764,7 +1991,9 @@ impl EditorApp {
         self.state.undo_history.clear();
         self.state.redo_history.clear();
         self.project_path = Some(path.to_owned());
-        self.remember_recent_project(path);
+        if !self.player_mode {
+            self.remember_recent_project(path);
+        }
         self.state.push_log(log::Level::Info, format!("Projet chargé : {}", path.display()));
         Ok(())
     }
@@ -1809,7 +2038,7 @@ impl EditorApp {
             .map_err(|error| anyhow::anyhow!("Chargement de `{script_path}` : {error}"))
     }
 
-    fn load_object_scripts(&mut self) {
+    fn load_object_scripts(&mut self) -> anyhow::Result<()> {
         let root = self.project_path.as_ref()
             .and_then(|path| path.parent())
             .map(std::path::Path::to_path_buf)
@@ -1818,6 +2047,7 @@ impl EditorApp {
             .filter_map(|object| object.script.as_ref().filter(|path| !path.trim().is_empty())
                 .map(|path| (object.id.to_string(), path.clone())))
             .collect();
+        let mut errors = Vec::new();
         for (object_id, script_path) in scripts {
             let path = std::path::Path::new(&script_path);
             let resolved = if path.is_absolute() { path.to_owned() } else { root.join(path) };
@@ -1825,7 +2055,13 @@ impl EditorApp {
             if let Err(error) = self.state.script_runtime.load_object_script(&resolved, object_id) {
                 self.state.push_log(log::Level::Error,
                     format!("Chargement du script d'objet `{script_path}` : {error}"));
+                errors.push(format!("{script_path} : {error}"));
             }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!("Impossible de charger les scripts d'objet : {}", errors.join("; "))
         }
     }
 }
@@ -2289,6 +2525,40 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 #[cfg(not(target_os = "windows"))]
 fn choose_project_file(_save: bool) -> anyhow::Result<Option<std::path::PathBuf>> {
     anyhow::bail!("Le sélecteur natif de fichiers est uniquement disponible sous Windows")
+}
+
+#[cfg(target_os = "windows")]
+fn choose_export_file(default_name: &str) -> anyhow::Result<Option<std::path::PathBuf>> {
+    let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.SaveFileDialog
+$dialog.Title = 'Exporter le jeu'
+$dialog.Filter = 'Archive ZIP (*.zip)|*.zip'
+$dialog.DefaultExt = 'zip'
+$dialog.AddExtension = $true
+$dialog.OverwritePrompt = $true
+$dialog.FileName = '{default_name}'
+$dialog.RestoreDirectory = $true
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    [Console]::Out.Write($dialog.FileName)
+}
+"#.replace("{default_name}", &default_name.replace('\'', "''"));
+    let output = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", &script])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!("Le sélecteur d'export Windows a échoué : {}",
+            String::from_utf8_lossy(&output.stderr).trim());
+    }
+    let selected = String::from_utf8(output.stdout)?;
+    let selected = selected.trim();
+    if selected.is_empty() { Ok(None) } else { Ok(Some(std::path::PathBuf::from(selected))) }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn choose_export_file(_default_name: &str) -> anyhow::Result<Option<std::path::PathBuf>> {
+    anyhow::bail!("Le sélecteur d'export Windows est uniquement disponible sous Windows")
 }
 
 impl Default for EditorApp {

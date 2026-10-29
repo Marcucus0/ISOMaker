@@ -172,6 +172,7 @@ impl SceneView {
         fps: Option<f32>,
         interactive: bool,
         show_grid: bool,
+        show_camera_selector: bool,
         runtime_camera: &mut Option<ObjectId>,
     ) -> bool {
         let mut modified = false;
@@ -652,7 +653,7 @@ impl SceneView {
             );
         }
 
-        if !interactive {
+        if !interactive && show_camera_selector {
             show_runtime_camera_selector(ui.ctx(), scene, rect, runtime_camera);
         }
 
@@ -673,6 +674,10 @@ impl SceneView {
         show_grid: bool,
     ) {
         let zoom = self.camera.zoom;
+        let definitions_by_id: HashMap<u16, &TileDefinition> = tile_definitions
+            .iter()
+            .map(|definition| (definition.id, definition))
+            .collect();
         let cam_tile = proj.screen_to_tile(
             world::coords::ScreenPos::new(self.camera.position.x, self.camera.position.y),
         );
@@ -686,7 +691,7 @@ impl SceneView {
         let step = if detailed { 1 } else { (2.0 / zoom).ceil() as i32 };
 
         if !detailed {
-            self.draw_low_zoom_tiles(scene, tile_definitions, painter, proj, center, rect, cam_tile, tile_range);
+            self.draw_low_zoom_tiles(scene, &definitions_by_id, painter, proj, center, rect, cam_tile, tile_range);
         }
 
         // Anchor coarse grid vertices to world coordinates, not to the camera
@@ -725,7 +730,7 @@ impl SceneView {
                     // Full tile fill and selection are only useful at readable sizes.
                     let tile_data = scene.get_tile(tile);
                     if !tile_data.is_empty() {
-                        let definition = tile_definitions.iter().find(|definition| definition.id == tile_data.tile_type);
+                        let definition = definitions_by_id.get(&tile_data.tile_type).copied();
                         let texture = definition.and_then(|definition| definition.texture.as_deref())
                             .and_then(|path| self.load_tile_texture_id(ui.ctx(), asset_root, path));
                         if let Some(texture_id) = texture {
@@ -749,7 +754,7 @@ impl SceneView {
                             painter.add(egui::Shape::mesh(mesh));
                         } else {
                             painter.add(egui::Shape::convex_polygon(
-                                corners.to_vec(), tile_type_color(tile_data.tile_type, tile_definitions), Stroke::NONE,
+                                corners.to_vec(), tile_type_color(tile_data.tile_type, &definitions_by_id), Stroke::NONE,
                             ));
                         }
                     }
@@ -790,7 +795,7 @@ impl SceneView {
     fn draw_low_zoom_tiles(
         &self,
         scene: &Scene,
-        tile_definitions: &[TileDefinition],
+        definitions_by_id: &HashMap<u16, &TileDefinition>,
         painter: &Painter,
         proj: &IsoProjection,
         center: Vec2,
@@ -841,7 +846,7 @@ impl SceneView {
                     );
                     if !tile_bounds.intersects(rect) { continue; }
 
-                    let color = tile_type_color(data.tile_type, tile_definitions);
+                    let color = tile_type_color(data.tile_type, definitions_by_id);
                     let first = mesh.vertices.len() as u32;
                     mesh.colored_vertex(egui::pos2(screen.x, screen.y - half_height), color);
                     mesh.colored_vertex(egui::pos2(screen.x + half_width, screen.y), color);
@@ -870,6 +875,7 @@ impl SceneView {
     ) {
         let zoom = self.camera.zoom;
         self.object_hit_rects.clear();
+        let moving_objects: HashSet<ObjectId> = self.move_objects.iter().map(|(id, _)| *id).collect();
         for obj in scene.objects_sorted_for_render() {
             if obj.object_type == ObjectType::Camera {
                 if show_cameras && !obj.hidden {
@@ -906,7 +912,7 @@ impl SceneView {
             if obj.hidden {
                 continue;
             }
-            if self.move_objects.iter().any(|(id, _)| *id == obj.id) {
+            if moving_objects.contains(&obj.id) {
                 continue;
             }
             let screen = self.tile_to_screen(obj.tile_pos, proj, center);
@@ -1495,8 +1501,8 @@ fn tile_rectangle(start: TilePos, end: TilePos) -> HashSet<TilePos> {
 }
 
 /// Couleur de prévisualisation selon le type de tuile (1-16 définis arbitrairement).
-fn tile_type_color(tile_type: u16, definitions: &[TileDefinition]) -> Color32 {
-    definitions.iter().find(|definition| definition.id == tile_type)
+fn tile_type_color(tile_type: u16, definitions: &HashMap<u16, &TileDefinition>) -> Color32 {
+    definitions.get(&tile_type).copied()
         .map(|definition| Color32::from_rgba_unmultiplied(
             definition.color[0], definition.color[1], definition.color[2], definition.color[3],
         ))

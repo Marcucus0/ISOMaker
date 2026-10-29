@@ -2,6 +2,7 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
@@ -41,6 +42,7 @@ struct LoadedScript {
     /// Module Python chargé.
     module: Py<PyModule>,
     kind: ScriptKind,
+    hooks: HashSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,10 +100,18 @@ impl ScriptRuntime {
             let m = PyModule::from_code_bound(py, &source, path.to_string_lossy().as_ref(), module_name)?;
             Ok(m.unbind())
         })?;
+        let hooks = Python::with_gil(|py| {
+            let module = module.bind(py);
+            ["on_update", "_on_update", "on_start", "_on_game_launch", "on_stop"]
+                .into_iter()
+                .filter_map(|hook| module.hasattr(hook).ok().filter(|exists| *exists).map(|_| hook.to_owned()))
+                .collect()
+        });
         self.scripts.push(LoadedScript {
             path: path.to_owned(),
             module,
             kind,
+            hooks,
         });
         log::info!("Script chargé : {}", path.display());
         Ok(())
@@ -148,6 +158,29 @@ impl ScriptRuntime {
         self.call_hook("on_update", delta_time, HookTarget::Legacy, &[], InputState::default())
     }
 
+    pub fn has_legacy_update(&self) -> bool {
+        self.has_hook("on_update", HookTarget::Legacy)
+    }
+
+    pub fn has_world_update(&self) -> bool {
+        self.has_hook("_on_update", HookTarget::World)
+    }
+
+    pub fn has_object_update(&self) -> bool {
+        self.has_hook("_on_update", HookTarget::Objects)
+    }
+
+    fn has_hook(&self, hook: &str, target: HookTarget) -> bool {
+        self.scripts.iter().any(|script| {
+            script.hooks.contains(hook) && matches!(
+                (&script.kind, target),
+                (ScriptKind::Legacy, HookTarget::Legacy)
+                    | (ScriptKind::World, HookTarget::World)
+                    | (ScriptKind::Object(_), HookTarget::Objects)
+            )
+        })
+    }
+
     /// Appelle `on_stop(game)` sur tous les scripts.
     pub fn call_stop(&mut self) -> Result<Vec<GameCommand>, ScriptError> {
         let cmds = self.call_hook("on_stop", 0.0, HookTarget::Legacy, &[], InputState::default())?;
@@ -157,6 +190,9 @@ impl ScriptRuntime {
 
     /// Implémentation interne : appelle une fonction hook sur tous les scripts.
     fn call_hook(&self, hook: &str, delta_time: f32, target: HookTarget, objects: &[ObjectScriptState], input: InputState) -> Result<Vec<GameCommand>, ScriptError> {
+        if !self.has_hook(hook, target) {
+            return Ok(Vec::new());
+        }
         // Vide la file avant l'appel.
         {
             let mut q = self.queue.lock().map_err(|_| ScriptError::LockError)?;

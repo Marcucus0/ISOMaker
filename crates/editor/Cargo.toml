@@ -7,6 +7,10 @@ edition = "2021"
 name = "editor"
 path = "src/main.rs"
 
+[[bin]]
+name = "player"
+path = "src/player.rs"
+
 [dependencies]
 egui = { workspace = true }
 egui-wgpu = { workspace = true }

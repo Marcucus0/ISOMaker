@@ -7,13 +7,13 @@ ISOMaker est un éditeur et moteur de jeu 2D isométrique écrit en Rust. Il per
 ## État du projet
 
 <!-- README:GENERATED:START -->
-**Version actuelle :** `0.1.0`  
-**Dernière release :** `0.1.0` · 2026-10-29 ([changelog](CHANGELOG.md); sans tag Git)  
-**Commits du dépôt :** 6  
-**Dernier commit :** `d8eb979 (2026-10-29)`  
-**Code et documentation :** 34 fichiers Rust · 8 804 lignes Rust · 4 fichiers Python · 5 documents Markdown
+**Version actuelle :** `0.1.0`<br>
+**Dernière release :** `0.1.0` · 2026-10-29 ([changelog](CHANGELOG.md); sans tag Git)<br>
+**Commits du dépôt :** 6<br>
+**Dernier commit :** `25180c9 (2026-10-29)`<br>
+**Code et documentation :** 35 fichiers Rust · 9 204 lignes Rust · 5 fichiers Python · 5 documents Markdown
 
-_Mis à jour le 2026-10-29._
+_Mis à jour le 2026-10-30._
 <!-- README:GENERATED:END -->
 
 Les chiffres ci-dessus sont générés depuis le dépôt. Pour les recalculer localement :
@@ -36,6 +36,29 @@ Construire une version optimisée :
 ```powershell
 cargo build --release -p editor
 ```
+
+## Lancer un projet dans le lecteur
+
+Le lecteur masque les outils de l'éditeur et lance directement la scène active
+en mode jeu. Échap ferme la fenêtre.
+
+```powershell
+cargo run -p editor --bin player -- chemin/vers/jeu.isomaker
+```
+
+Depuis l'éditeur, choisir **Fichier → Exporter le jeu**. L'éditeur sauvegarde le
+projet, demande où écrire le ZIP puis lance la compilation en arrière-plan.
+Le succès ou le détail des erreurs apparaît dans les logs ; l'archive est
+vérifiée avant d'être signalée comme terminée. L'export peut aussi être lancé
+directement (Cargo et Python doivent être installés) :
+
+```powershell
+python scripts/export_game.py chemin/vers/jeu.isomaker
+```
+
+L'archive apparaît dans `dist/`. Elle contient le lecteur, le projet, son
+dossier d'assets/scripts et le runtime Python standard ; les modules Python
+tiers utilisés par les scripts ne sont pas ajoutés automatiquement.
 
 ## Tests
 

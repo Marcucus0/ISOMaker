@@ -102,8 +102,21 @@ complet prêt au déploiement.
   ne peut pas être chargé ; la fenêtre Monde s'ouvre alors.
   Les logs identiques consécutifs sont regroupés pour limiter le coût des
   sorties produites à chaque frame.
+- **Lecteur et export Windows** : le binaire `player` lance le projet sans les
+  panneaux d'édition. **Fichier → Exporter le jeu** sauvegarde le projet,
+  demande le chemin de sortie et lance la compilation en arrière-plan.
+  `scripts/export_game.py` compile le lecteur et produit un ZIP portable avec
+  le projet, son dossier associé et la bibliothèque standard Python. Les
+  paquets Python tiers ne sont pas inclus automatiquement. Le succès et les
+  erreurs détaillées sont consignés dans le panneau Log, après validation ZIP.
 
 ### Limites connues et travail restant
+
+- **Optimisations de rendu et de scripts** : les recherches de palette et
+  d'objets déplacés sont indexées pendant le dessin. Les callbacks Python
+  absents sont ignorés et les instantanés sont réutilisés quand les commandes
+  du monde ne changent pas la scène. Le tri complet des objets et la production
+  des formes de grille restent à profiler avant une optimisation structurelle.
 
 - L'éditeur de plans réutilisables de bâtiments n'existe pas encore. Son
   périmètre est listé dans [`todo list.md`](../todo%20list.md).
@@ -111,8 +124,8 @@ complet prêt au déploiement.
   paramètres de l'éditeur. L'option d'affichage de la grille en Lecture/Pause
   n'est pas persistée. Les dimensions de tuile existent dans les métadonnées de
   scène, sans UI dédiée.
-- La boucle de scripts est liée à Lecture dans l'éditeur, mais l'exécution
-  autonome d'un jeu publié n'est pas encore implémentée.
+- L'export ne collecte pas encore les dépendances Python tierces utilisées par
+  les scripts. Le ZIP doit être vérifié sur une installation Windows propre.
 - L'API Python expose les objets de scène sous forme d'instantanés en lecture
   seule, mais pas encore l'état global du monde, les entrées souris ou les
   événements ; le débogage interactif et les permissions de scripts tiers
@@ -126,8 +139,8 @@ complet prêt au déploiement.
    enregistrer les plans dans le projet et gérer leurs instances.
 2. Étendre l'API Python avec lecture de l'état du monde, accès aux entrées souris
    et événements de jeu, en gardant les échanges groupés par callback.
-3. Finaliser l'exécution autonome du jeu, le débogage des scripts et la
-   séparation entre éditeur et runtime.
+3. Gérer les dépendances Python tierces de l'export, valider le ZIP sur une
+   installation Windows propre et améliorer le débogage des scripts.
 4. Étendre les collisions avec des formes libres, la résolution de poussée et
    des événements de contact exploitables par les scripts.
 5. Ajouter une interface pour les dimensions de tuile et décider quels réglages

@@ -37,6 +37,21 @@ L'éditeur possède son propre affichage de la grille et des textures de scène 
 `renderer` fournit le contexte et les ressources GPU, mais ne constitue pas
 encore un moteur de rendu de jeu complet.
 
+Le dessin de la vue prépare un index des définitions de tuiles pour le frame,
+afin de faire les recherches par identifiant en temps constant au lieu de
+parcourir la palette pour chaque tuile visible. Les objets temporairement
+déplacés sont également indexés par identifiant pendant le dessin. Les hooks
+Python sont repérés au chargement : les callbacks absents sont ignorés sans
+appel Python par frame. Les instantanés de scène ne sont copiés qu'en présence
+de callbacks concernés et sont réutilisés entre les hooks si le hook monde n'a
+pas émis de commande.
+
+Les principaux points à mesurer avant d'aller plus loin sont le tri de tous les
+objets à chaque frame, la création de formes egui pour chaque ligne de grille et
+les copies d'instantanés nécessaires aux scripts Python. Une mise en cache
+persistante ou un changement du rendu doit être guidé par un profilage, car la
+scène reste modifiable par de nombreux outils et callbacks.
+
 ## Modèle de projet et persistance
 
 La hiérarchie persistante est :
@@ -269,9 +284,26 @@ conserve son comportement habituel.
 L'API permet entre autres de créer, déplacer ou supprimer des objets, de changer
 des propriétés, de lire l'état clavier et d'écrire dans les logs. Les scripts
 restent du code de confiance : PyO3 ne constitue pas une sandbox. La lecture
-d'état global, les entrées souris, les événements de jeu, le débogage interactif,
-l'exécution en dehors de l'éditeur et le pipeline de déploiement restent à
-développer.
+d'état global, les entrées souris, les événements de jeu, le débogage interactif
+et le pipeline de déploiement restent à développer.
+
+Le binaire `player` partage la boucle graphique et les systèmes de scène avec
+l'éditeur, mais charge directement un projet en Lecture et n'affiche pas les
+panneaux d'édition. Il se lance avec le chemin d'un projet :
+
+```powershell
+cargo run -p editor --bin player -- chemin/vers/jeu.isomaker
+```
+
+Échap ferme le lecteur. Dans l'éditeur, **Fichier → Exporter le jeu** demande
+un chemin de sortie Windows, sauvegarde le projet et lance l'export en arrière-
+plan. Le résultat et les diagnostics sont transmis au panneau Log. Le script
+`scripts/export_game.py` produit un ZIP portable contenant le binaire Release,
+le projet et son dossier associé ainsi que la bibliothèque standard Python
+correspondant à l'interpréteur configuré pour PyO3. Il vérifie le contenu et
+l'intégrité de l'archive avant de signaler un succès. Les modules Python tiers
+ne sont pas collectés automatiquement ; le ZIP doit être essayé sur une
+installation Windows propre avant distribution.
 
 ## Démarrage
 

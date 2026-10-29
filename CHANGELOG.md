@@ -6,6 +6,10 @@ Les changements notables du projet sont consignés ici.
 
 ### Ajouté
 
+- Lecteur autonome `player` et export Windows en ZIP portable depuis **Fichier
+  → Exporter le jeu** ; l'export inclut le runtime Python standard, valide
+  l'intégrité de l'archive et consigne succès ou erreurs détaillées.
+- Statistiques générées dans le README et actualisées par workflow GitHub.
 - Recherche d'objets par nom ou UUID dans l'API Python, lecture de leurs
   instantanés et accès aux propriétés caméra depuis les scripts.
 - Palette de tuiles propres à chaque projet, avec couleur, texture PNG/JPEG/GIF
@@ -24,6 +28,8 @@ Les changements notables du projet sont consignés ici.
 - Références de documentation concernant les préférences de grille et la
   recherche d'objets Python.
 - Documentation Python actualisée sur la lecture des objets et les collisions.
+- Documentation mise à jour pour le lecteur, l'export et ses limites concernant
+  les dépendances Python tierces.
 - Test de relancement d'un script objet, qui tient compte du nom d'objet présent
   dans le préfixe des logs après renommage.
 

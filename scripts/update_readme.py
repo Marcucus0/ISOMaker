@@ -77,10 +77,10 @@ def generated_section() -> str:
 
     return "\n".join(
         [
-            f"**Version actuelle :** `{version}`  ",
-            f"**Dernière release :** {latest_release()}  ",
-            f"**Commits du dépôt :** {count_commits()}  ",
-            f"**Dernier commit :** `{commit}`  ",
+            f"**Version actuelle :** `{version}`<br>",
+            f"**Dernière release :** {latest_release()}<br>",
+            f"**Commits du dépôt :** {count_commits()}<br>",
+            f"**Dernier commit :** `{commit}`<br>",
             f"**Code et documentation :** {rust_files} fichiers Rust · {rust_lines:,} lignes Rust · {python_files} fichiers Python · {docs} documents Markdown"
             .replace(",", "\u202f"),
             f"\n_Mis à jour le {date}._",

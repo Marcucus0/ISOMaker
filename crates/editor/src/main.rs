@@ -1,6 +1,5 @@
-//! Point d'entrée de l'éditeur.
-//!
-//! Initialise winit, wgpu et egui, puis lance la boucle de jeu.
+// Point d'entrée de l'éditeur et du lecteur autonome.
+// Initialise winit, wgpu et egui, puis lance la boucle d'application.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,17 +22,86 @@ fn main() {
 
     log::info!("=== Moteur de jeu 2D isométrique ===");
 
+    let is_player = env!("CARGO_BIN_NAME") == "player";
+    let initial_editor = if is_player {
+        prepare_bundled_python();
+        let project_path = std::env::args_os().nth(1).map(std::path::PathBuf::from)
+            .or_else(find_project_next_to_executable);
+        let Some(project_path) = project_path else {
+            report_startup_error("Impossible de trouver le projet à ouvrir. Passez le chemin .isomaker en argument.");
+            return;
+        };
+        match EditorApp::new_player(&project_path) {
+            Ok(editor) => Some(editor),
+            Err(error) => {
+                report_startup_error(&format!("Impossible de lancer le jeu depuis {} : {error}", project_path.display()));
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     let event_loop = EventLoop::new().expect("Impossible de créer l'event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = App::Uninitialized;
+    let mut app = App::Uninitialized { is_player, editor: initial_editor };
     event_loop.run_app(&mut app).expect("Erreur de boucle d'événements");
+}
+
+#[cfg(windows)]
+fn report_startup_error(message: &str) {
+    use std::{ffi::c_void, os::windows::ffi::OsStrExt};
+    let title: Vec<u16> = std::ffi::OsStr::new("ISOMaker — erreur de lancement")
+        .encode_wide().chain(std::iter::once(0)).collect();
+    let text: Vec<u16> = std::ffi::OsStr::new(message)
+        .encode_wide().chain(std::iter::once(0)).collect();
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(window: *mut c_void, text: *const u16, title: *const u16, kind: u32) -> i32;
+    }
+    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x10); }
+}
+
+#[cfg(not(windows))]
+fn report_startup_error(message: &str) {
+    eprintln!("{message}");
+}
+
+fn find_project_next_to_executable() -> Option<std::path::PathBuf> {
+    let directory = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let default = directory.join("game.isomaker");
+    if default.is_file() {
+        return Some(default);
+    }
+    let mut projects = std::fs::read_dir(directory).ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("isomaker")));
+    let project = projects.next()?;
+    projects.next().is_none().then_some(project)
+}
+
+fn prepare_bundled_python() {
+    let Some(home) = std::env::current_exe().ok()
+        .and_then(|executable| executable.parent().map(|directory| directory.join("python-runtime")))
+        .filter(|home| home.join("Lib").is_dir()) else {
+            return;
+        };
+    std::env::set_var("PYTHONHOME", &home);
+    let mut paths = vec![home.clone(), home.join("DLLs")];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    if let Ok(path) = std::env::join_paths(paths) {
+        std::env::set_var("PATH", path);
+    }
 }
 
 // ── États de l'application ────────────────────────────────────────────────────
 
 enum App {
-    Uninitialized,
+    Uninitialized { is_player: bool, editor: Option<EditorApp> },
     Running(RunningApp),
 }
 
@@ -60,10 +128,12 @@ impl ApplicationHandler for App {
         if matches!(self, App::Running(_)) {
             return; // Déjà initialisé.
         }
+        let is_player = matches!(self, App::Uninitialized { is_player: true, .. });
 
         // ── Fenêtre ────────────────────────────────────────────────────────────
+        let title = if is_player { "ISOMaker — Jeu" } else { "Moteur de jeu 2D isométrique — Éditeur" };
         let attrs = Window::default_attributes()
-            .with_title("Moteur de jeu 2D isométrique — Éditeur")
+            .with_title(title)
             .with_inner_size(winit::dpi::LogicalSize::new(1400u32, 900u32));
         let window = Arc::new(
             event_loop.create_window(attrs).expect("Impossible de créer la fenêtre"),
@@ -110,7 +180,10 @@ impl ApplicationHandler for App {
         );
 
         // ── Éditeur ───────────────────────────────────────────────────────────
-        let editor = EditorApp::new();
+        let editor = match self {
+            App::Uninitialized { editor, .. } => editor.take().unwrap_or_else(EditorApp::new),
+            App::Running(_) => unreachable!(),
+        };
 
         log::info!("Éditeur initialisé. Fenêtre {}×{}.",
             window.inner_size().width, window.inner_size().height);
@@ -185,6 +258,7 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Fermeture demandée.");
+                app.editor.shutdown_player();
                 event_loop.exit();
             }
 

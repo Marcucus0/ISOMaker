@@ -184,6 +184,7 @@ pub struct Toolbar {
     pub open_requested: bool,
     pub save_requested: bool,
     pub save_as_requested: bool,
+    pub export_requested: bool,
     pub scene_switch_requested: Option<usize>,
     pub new_scene_requested: bool,
     pub world_settings_requested: bool,
@@ -201,6 +202,7 @@ impl Default for Toolbar {
             open_requested: false,
             save_requested: false,
             save_as_requested: false,
+            export_requested: false,
             scene_switch_requested: None,
             new_scene_requested: false,
             world_settings_requested: false,
@@ -221,6 +223,7 @@ impl Toolbar {
         scene_names: &[String],
         active_scene: usize,
         recent_projects: &[PathBuf],
+        export_in_progress: bool,
     ) {
         self.undo_requested = false;
         self.redo_requested = false;
@@ -228,6 +231,7 @@ impl Toolbar {
         self.open_requested = false;
         self.save_requested = false;
         self.save_as_requested = false;
+        self.export_requested = false;
         self.scene_switch_requested = None;
         self.new_scene_requested = false;
         self.world_settings_requested = false;
@@ -266,6 +270,12 @@ impl Toolbar {
                 }
                 if ui.button("Enregistrer sous…").clicked() {
                     self.save_as_requested = true;
+                    ui.close_menu();
+                }
+                if ui.add_enabled(!export_in_progress, egui::Button::new(
+                    if export_in_progress { "Export en cours…" } else { "Exporter le jeu…" },
+                )).clicked() {
+                    self.export_requested = true;
                     ui.close_menu();
                 }
                 });

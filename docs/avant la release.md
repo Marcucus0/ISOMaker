@@ -12,9 +12,16 @@
    Sous Windows, lance les tests dans un répertoire `CARGO_TARGET_DIR` distinct
    si `target/debug/editor.exe` est verrouillé par une instance ouverte.
 
-Vérification effectuée le 29 octobre 2026 : `cargo check --workspace`,
-`cargo build --release -p editor`, les 30 tests Rust et les 5 tests Python
-passent.
+Vérification effectuée le 29 octobre 2026 :
+
+- Documentation contrôlée : `ARCHITECTURE.md`, `PROGRESSION.md`, `PYTHON_API.md`
+  et README mis à jour ; le stub `python/engine_api/__init__.pyi` reste déclaré
+  dans `.vscode/settings.json`.
+- `cargo check --workspace` : réussi sans erreur ni avertissement.
+- `cargo build --release -p editor` : réussi.
+- `cargo test --workspace` dans `target/release-check` : 30 tests réussis.
+- `python -m unittest discover -s python/tests -v` : 5 tests réussis.
+- Export du projet `test2` : ZIP créé et vérifié, intégrité confirmée.
 
 
 enfin : 
