@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/engine",
+    "crates/renderer",
+    "crates/world",
+    "crates/editor",
+    "crates/scripting",
+    "crates/assets",
+]
+
+[workspace.dependencies]
+# Fenêtre & événements
+winit = "0.30"
+
+# Rendu GPU
+wgpu = { version = "22", features = ["webgl"] }
+
+# Interface éditeur
+egui = "0.29"
+egui-wgpu = "0.29"
+egui-winit = "0.29"
+
+# Images
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# Sérialisation
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Python
+pyo3 = { version = "0.22", features = ["auto-initialize"] }
+
+# Utilitaires
+uuid = { version = "1", features = ["v4", "serde"] }
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"
+thiserror = "1"
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.28"
+pollster = "0.3"

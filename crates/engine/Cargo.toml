@@ -1,0 +1,10 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winit = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }

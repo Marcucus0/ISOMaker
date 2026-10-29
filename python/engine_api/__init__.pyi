@@ -1,0 +1,263 @@
+"""
+Stubs de type pour l'API moteur exposée aux scripts Python.
+Utilisés par les IDE (VSCode, PyCharm) pour l'autocomplétion.
+"""
+
+from __future__ import annotations
+from typing import Any
+
+
+class Key:
+    """Constante de touche fournie par game.keys ; ne pas instancier."""
+    ...
+
+
+class KeySet:
+    A: Key
+    B: Key
+    C: Key
+    D: Key
+    E: Key
+    F: Key
+    G: Key
+    H: Key
+    I: Key
+    J: Key
+    K: Key
+    L: Key
+    M: Key
+    N: Key
+    O: Key
+    P: Key
+    Q: Key
+    R: Key
+    S: Key
+    T: Key
+    U: Key
+    V: Key
+    W: Key
+    X: Key
+    Y: Key
+    Z: Key
+    DIGIT_0: Key
+    DIGIT_1: Key
+    DIGIT_2: Key
+    DIGIT_3: Key
+    DIGIT_4: Key
+    DIGIT_5: Key
+    DIGIT_6: Key
+    DIGIT_7: Key
+    DIGIT_8: Key
+    DIGIT_9: Key
+    SPACE: Key
+    ENTER: Key
+    ESCAPE: Key
+    BACKSPACE: Key
+    DELETE: Key
+    TAB: Key
+    LEFT: Key
+    RIGHT: Key
+    UP: Key
+    DOWN: Key
+    SHIFT: Key
+    CTRL: Key
+    ALT: Key
+    F1: Key
+    F2: Key
+    F3: Key
+    F4: Key
+    F5: Key
+    F6: Key
+    F7: Key
+    F8: Key
+    F9: Key
+    F10: Key
+    F11: Key
+    F12: Key
+
+
+class GameContext:
+    """
+    Contexte transmis aux hooks du monde et aux scripts attachés aux objets.
+
+    Instance créée par le moteur Rust (via PyO3) — ne pas instancier manuellement.
+    """
+
+    @property
+    def delta_time(self) -> float:
+        """Temps écoulé depuis le dernier frame, en secondes."""
+        ...
+
+    @property
+    def object_id(self) -> str | None:
+        """UUID de l'objet lié au script, ou None pour le script du monde."""
+        ...
+
+    @property
+    def name(self) -> str:
+        """Nom de l'objet scripté."""
+        ...
+
+    @property
+    def object_type(self) -> str:
+        """Type de l'objet (lecture seule)."""
+        ...
+
+    @property
+    def has_collisions(self) -> bool:
+        """Indique si les collisions sont activées."""
+        ...
+
+    @property
+    def hidden(self) -> bool:
+        """Indique si l'objet est masqué."""
+        ...
+
+    @property
+    def fit_texture_to_diamond(self) -> bool:
+        """Indique si la texture est ajustée au losange."""
+        ...
+
+    @property
+    def rotation(self) -> str:
+        """Orientation : North, East, South ou West."""
+        ...
+
+    @property
+    def layer(self) -> str:
+        """Couche de rendu de l'objet."""
+        ...
+
+    @property
+    def texture(self) -> str | None:
+        """Chemin de texture, ou None si aucune texture n'est définie."""
+        ...
+
+    @property
+    def script(self) -> str | None:
+        """Chemin du script associé, ou None."""
+        ...
+
+    @property
+    def x(self) -> int:
+        """Coordonnée X actuelle sur la grille (script d'objet uniquement)."""
+        ...
+
+    @property
+    def y(self) -> int:
+        """Coordonnée Y actuelle sur la grille (script d'objet uniquement)."""
+        ...
+
+    @property
+    def z(self) -> int:
+        """Étage Z actuel sur la grille (script d'objet uniquement)."""
+        ...
+
+    @property
+    def keys(self) -> KeySet:
+        """Constantes pour les fonctions d'entrée clavier (ex. game.keys.Z)."""
+        ...
+
+    def key_pressed(self, key: Key) -> bool:
+        """True tant que la touche est maintenue (ex. game.keys.Z)."""
+        ...
+
+    def key_just_pressed(self, key: Key) -> bool:
+        """True pendant le callback du frame où la touche vient d'être pressée."""
+        ...
+
+    def key_just_released(self, key: Key) -> bool:
+        """True pendant le callback du frame où la touche vient d'être relâchée."""
+        ...
+
+    def key_released(self, key: Key) -> bool:
+        """Alias de key_just_released."""
+        ...
+
+    def move_self(self, x: int, y: int) -> None:
+        """Déplace l'objet lié au script. Valide uniquement pour un script d'objet."""
+        ...
+
+    def destroy_self(self) -> None:
+        """Supprime l'objet lié au script. Valide uniquement pour un script d'objet."""
+        ...
+
+    def set_self_property(self, key: str, value: Any) -> None:
+        """Modifie un champ éditable de l'objet ou une propriété personnalisée."""
+        ...
+
+    def get_self_property(self, key: str) -> Any:
+        """Lit un champ d'objet ou une propriété personnalisée ; None si absent."""
+        ...
+
+    def spawn(
+        self,
+        name: str,
+        object_type: str,
+        x: int,
+        y: int,
+    ) -> None:
+        """
+        Crée un objet dans la scène.
+
+        Args:
+            name: Nom de l'objet (affiché dans l'éditeur).
+            object_type: "Building", "Character", "Item", "Decoration", ou nom personnalisé.
+            x: Position X sur la grille.
+            y: Position Y sur la grille.
+        """
+        ...
+
+    def destroy(self, object_id: str) -> None:
+        """
+        Supprime un objet par son UUID.
+
+        Args:
+            object_id: UUID de l'objet (chaîne).
+        """
+        ...
+
+    def move_object(self, object_id: str, x: int, y: int) -> None:
+        """
+        Déplace un objet existant.
+
+        Args:
+            object_id: UUID de l'objet.
+            x, y: Nouvelle position sur la grille.
+        """
+        ...
+
+    def set_property(self, object_id: str, key: str, value: Any) -> None:
+        """
+        Définit une propriété personnalisée sur un objet.
+
+        Types supportés : bool, int, float, str, list, dict.
+
+        Args:
+            object_id: UUID de l'objet.
+            key: Nom de la propriété.
+            value: Valeur (types de base Python uniquement).
+        """
+        ...
+
+    def set_global(self, key: str, value: Any) -> None:
+        """
+        Définit une valeur dans l'état global du jeu.
+
+        Args:
+            key: Clé de la valeur.
+            value: Valeur (types de base Python uniquement).
+        """
+        ...
+
+    def log(self, message: str) -> None:
+        """Émet un message de log (niveau Info) visible dans le panneau Log de l'éditeur."""
+        ...
+
+    def log_warning(self, message: str) -> None:
+        """Émet un message de log de niveau Avertissement."""
+        ...
+
+    def log_error(self, message: str) -> None:
+        """Émet un message de log de niveau Erreur."""
+        ...

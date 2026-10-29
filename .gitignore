@@ -1,0 +1,49 @@
+# =========================
+# RUST / CARGO
+# =========================
+/target/
+**/target/
+
+# =========================
+# PYTHON
+# =========================
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# =========================
+# CACHE
+# =========================
+.xwin-cache/
+.cache/
+*.log
+*.tmp
+
+# =========================
+# SECRETS
+# =========================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# =========================
+# SYSTEME
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# FICHIERS TEMPORAIRES
+# =========================
+*.bak
+*.swp
+*.swo
+*~

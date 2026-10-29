@@ -1,0 +1,11 @@
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+rustflags = [
+    "-Lnative=C:/Users/marcus/.xwin/crt/lib/x86_64",
+    "-Lnative=C:/Users/marcus/.xwin/sdk/lib/um/x86_64",
+    "-Lnative=C:/Users/marcus/.xwin/sdk/lib/ucrt/x86_64",
+    "-Lnative=C:/Users/marcus/AppData/Local/Programs/Python/Python313/libs",
+]
+
+[env]
+PYO3_PYTHON = "C:/Users/marcus/AppData/Local/Programs/Python/Python313/python.exe"

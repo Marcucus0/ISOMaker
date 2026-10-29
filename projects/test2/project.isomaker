@@ -1,0 +1,4174 @@
+{
+  "format_version": 1,
+  "name": "Mon projet",
+  "world": {
+    "name": "Monde principal",
+    "script": "project/scripts/world.py",
+    "scenes": [
+      {
+        "meta": {
+          "format_version": 1,
+          "name": "Scène principale",
+          "tile_width": 64.0,
+          "tile_height": 32.0
+        },
+        "grid": {
+          "chunks": [
+            {
+              "chunk_x": 0,
+              "chunk_y": -1,
+              "tiles": [
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                }
+              ]
+            },
+            {
+              "chunk_x": -1,
+              "chunk_y": -1,
+              "tiles": [
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                }
+              ]
+            },
+            {
+              "chunk_x": -1,
+              "chunk_y": 0,
+              "tiles": [
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                }
+              ]
+            },
+            {
+              "chunk_x": 0,
+              "chunk_y": 0,
+              "tiles": [
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 1,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                },
+                {
+                  "tile_type": 0,
+                  "decoration": 0
+                }
+              ]
+            }
+          ]
+        },
+        "objects": {
+          "9ce19a47-2fc0-4f4f-b3d6-b641a6860980": {
+            "id": "9ce19a47-2fc0-4f4f-b3d6-b641a6860980",
+            "name": "Personage",
+            "object_type": {
+              "Custom": "custom"
+            },
+            "has_collisions": false,
+            "hidden": true,
+            "tile_pos": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            },
+            "footprint": {
+              "width": 1,
+              "height": 1
+            },
+            "layer": "Objects",
+            "asset_path": "project/assets/lizard-3357749-1920.jpg",
+            "fit_texture_to_diamond": true,
+            "rotation": "North",
+            "properties": {
+              "texture": {
+                "Str": "project/assets/lizard-3357749-1920.jpg"
+              }
+            },
+            "script": "project/scripts/personage.py",
+            "prefab_id": null
+          }
+        }
+      }
+    ],
+    "active_scene_index": 0
+  }
+}

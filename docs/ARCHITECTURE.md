@@ -1,0 +1,222 @@
+# Architecture du moteur de jeu isométrique
+
+Ce document décrit l'architecture effectivement présente dans le dépôt. Les
+objectifs qui ne sont pas encore implémentés sont suivis dans
+[`PROGRESSION.md`](PROGRESSION.md) et [`TODO list.md`](../TODO%20list.md).
+Le cahier des charges initial reste dans [`PROMPT BASE.md`](PROMPT%20BASE.md) ;
+il décrit des besoins, pas nécessairement des fonctions déjà disponibles.
+
+## Vue d'ensemble
+
+Le workspace Rust est organisé en crates spécialisées. L'éditeur est le point
+d'entrée utilisable aujourd'hui : il combine la scène isométrique, les outils
+d'édition et l'inspecteur dans une interface `egui` rendue avec `wgpu`.
+
+```mermaid
+flowchart LR
+    Editor["editor: interface et interactions"] --> World["world: projet, scènes, grille, objets"]
+    Editor --> Renderer["renderer: contexte GPU et textures"]
+    Editor --> Assets["assets: chargement et cache d'assets"]
+    Engine["engine: temps, entrées, modes"]
+    Scripting["scripting: API Python via PyO3"] --> World
+    Editor --> Scripting
+```
+
+## Crates
+
+| Crate | Responsabilité actuelle |
+|---|---|
+| `crates/world` | Modèles sérialisables du projet, du monde, des scènes, des tuiles, des objets et des prefabs ; coordonnées et projection isométriques. |
+| `crates/editor` | Application `egui`/`winit`, caméra, outils de scène, inspecteur, panneaux, sauvegarde et chargement des projets. |
+| `crates/renderer` | Initialisation `wgpu` et primitives de texture GPU. |
+| `crates/assets` | Types de handles, registre/cache et chargement d'images PNG/JPEG. |
+| `crates/engine` | Structures de temps, entrées et modes de fonctionnement du moteur. |
+| `crates/scripting` | Runtime Python embarqué via PyO3, contexte accessible aux scripts et file de commandes. |
+
+L'éditeur possède son propre affichage de la grille et des textures de scène ;
+`renderer` fournit le contexte et les ressources GPU, mais ne constitue pas
+encore un moteur de rendu de jeu complet.
+
+## Modèle de projet et persistance
+
+La hiérarchie persistante est :
+
+```text
+Project (un monde)
+└── World (script Python, plusieurs scènes et index de la scène active)
+    └── Scene (métadonnées, grille, objets)
+```
+
+Un projet porte une version de format. Chaque scène contient ses dimensions de
+tuile, sa grille et ses objets. La grille est clairsemée : seules les données
+non vides sont réparties dans des chunks de 16 × 16 tuiles. Les objets ont un
+identifiant stable, une position logique, une empreinte, une couche, des
+propriétés et, éventuellement, un chemin de texture. Le script Python est
+associé au monde.
+
+Le fichier de projet est un JSON avec extension `.isomaker`. Enregistrer inclut
+l'ensemble du projet (monde et scènes), pas uniquement la scène affichée.
+L'ouverture et l'enregistrement utilisent les dialogues de fichiers Windows.
+`Ctrl+S` enregistre le fichier courant ou ouvre « Enregistrer sous » lors du
+premier enregistrement.
+
+Les textures sont copiées dans un dossier propre au projet, voisin du fichier :
+
+```text
+mon_projet.isomaker
+mon_projet/
+└── assets/
+    └── textures choisies par l'utilisateur
+```
+
+Les objets enregistrent un chemin relatif de la forme
+`mon_projet/assets/nom.ext`, résolu depuis le dossier contenant le fichier
+`.isomaker`. Au premier enregistrement, les textures référencées sont copiées
+dans ce dossier et les chemins du projet sont actualisés. Une texture choisie
+après l'enregistrement est copiée directement dans le même dossier. Les
+collisions de noms de fichiers reçoivent un suffixe. Les textures intégrées au
+dépôt sous `assets/` ne sont pas automatiquement liées aux objets.
+
+Le script Python du monde suit le même principe de portabilité : la fenêtre
+**Monde → Script du monde** copie le fichier choisi dans le dossier
+`<nom_du_projet>/scripts/`. Le champ `script` du monde contient un chemin
+relatif depuis le dossier du fichier `.isomaker`. Lors du premier
+enregistrement ou d'un « Enregistrer sous », le script est copié vers le
+dossier du nouveau projet.
+
+## Coordonnées, grille et caméra
+
+La grille utilise des coordonnées logiques entières `(x, y, z)`. La projection
+dimétrique par défaut est de **64 × 32 pixels par tuile** (largeur × hauteur,
+avant zoom), définie dans les métadonnées de scène. Pour une tuile `(x, y, z)`,
+la projection relative à l'origine est :
+
+```text
+screen_x = (x - y) × tile_width / 2
+screen_y = (x + y) × tile_height / 2 - z × tile_height
+```
+
+Le zoom et le déplacement sont portés par la caméra de l'éditeur. Le zoom est
+centré sur le pointeur : le point logique sous la souris reste fixe pendant le
+changement d'échelle. Les coordonnées de la souris sont reconverties dans le
+repère de la scène avant le test d'appartenance au losange, pour que la tuile
+survolée corresponde à sa surface affichée.
+
+À faible zoom, la vue regroupe l'affichage des tuiles peintes par chunks et
+réduit la densité de la grille. Les lignes restent ancrées aux coordonnées du
+monde afin d'éviter qu'elles glissent par rapport aux tuiles pendant le zoom.
+L'affichage de la grille et ses couleurs sont des options de vue de l'éditeur ;
+elles ne sont pas enregistrées dans le projet. Les dimensions de tuile sont
+stockées par scène, mais ne disposent pas encore d'un contrôle dédié dans l'UI.
+
+## Interactions de l'éditeur
+
+- **Peindre / Gomme** : applique ou efface des tuiles sous le pointeur, y
+  compris pendant un glisser.
+- **Sélection** : sélectionne une tuile ou une zone logique. `Shift` sélectionne
+  les objets compris dans le rectangle sans sélectionner ni teinter les tuiles.
+- **Déplacer** : déplace la zone sélectionnée avec un aperçu temporaire. Sans
+  sélection, déplace l'objet touché, ou la tuile sous le pointeur. Les objets
+  déplacés sont identifiés par leur empreinte visuelle.
+- **Rotation** : fait tourner la sélection par quarts de tour successifs dans
+  les deux sens, avec un aperçu pendant le glisser.
+- **Remplir** : remplit les tuiles de la sélection ; sans sélection, remplit
+  seulement la tuile sous le pointeur.
+- **Suppression** : `Delete` supprime la sélection d'objets ou les tuiles
+  sélectionnées. `Ctrl+D` désélectionne. `S`, `D` et `R` activent Sélection,
+  Déplacer et Rotation.
+- **Annuler / Rétablir** : s'appuie sur des instantanés de scène en mémoire.
+- **Simulation** : `F9` lance ou reprend Lecture, `F10` arrête, `F11` met en
+  pause.
+- **Glisser-déposer** : les modules et prefabs du panneau Bâtiments peuvent être
+  déposés dans la scène avec un aperçu de placement.
+- En mode Lecture, un indicateur FPS lissé apparaît dans le coin supérieur droit
+  du viewport.
+
+Les opérations de glisser affichent leur aperçu avant de valider les données au
+relâchement de la souris.
+
+En modes Lecture et Pause, l'éditeur est en lecture seule : les outils, les
+panneaux de modification, l'annulation/rétablissement et les raccourcis d'édition
+sont désactivés. Les événements clavier ne déclenchent plus les raccourcis
+Sélection/Déplacer/Rotation, `Ctrl+D` ou `Delete`. La vue de scène reste visible
+et le zoom à la molette reste disponible.
+
+## Objets et textures
+
+Tous les objets peuvent activer ou désactiver les collisions ; par défaut,
+celles-ci sont désactivées. La propriété **Masqué** est désactivée par défaut ;
+quand elle est activée, l'objet n'est ni dessiné ni ciblé par un clic dans la
+vue, mais reste accessible dans la hiérarchie. Le chemin de texture est vide
+par défaut et se modifie depuis l'inspecteur avec le sélecteur de fichiers
+Windows. La case
+**Ajuster** est activée par défaut : l'image est mappée dans le losange de la
+tuile. Si elle est désactivée, l'image conserve son ratio et est contenue dans
+le rectangle de la tuile. Les objets sans texture valide utilisent un rendu de
+substitution et les textures chargées sont gardées en cache par la vue.
+
+Le contenu de la case « Ajuster » est sérialisé sur l'objet. Les anciens objets
+qui n'ont pas ce champ sont chargés avec la valeur par défaut `true`.
+
+## Python et runtime
+
+`scripting` embarque Python via PyO3. Le monde possède un script Python unique,
+configuré depuis son menu **Monde**. À Lecture, le runtime appelle
+`_on_game_launch(game)` une fois, puis `_on_update(game, delta_time)` à chaque
+mise à jour. Si le script choisi est vide, l'éditeur y écrit ces deux fonctions
+avec un corps `pass`. Le runtime conserve aussi la compatibilité avec les hooks
+globaux historiques `on_start(game)`, `on_update(game, delta_time)` et
+`on_stop(game)`.
+
+Lecture est refusée si aucun chemin de script du monde n'est défini ou si le
+fichier ne peut pas être chargé ; dans ce cas la fenêtre Monde s'ouvre pour
+permettre de choisir ou créer le script.
+
+`game` expose des méthodes qui ajoutent des commandes à une file ; Rust applique
+les commandes après le retour Python. Les exceptions sont collectées par hook
+et remontées à l'éditeur avec le chemin du script concerné.
+
+Les signatures, méthodes disponibles, types de valeurs et exemples sont
+détaillés dans [`PYTHON_API.md`](PYTHON_API.md).
+Les annotations des scripts et le stub `python/engine_api/__init__.pyi` donnent
+à Pylance les types nécessaires à l'autocomplétion. `.vscode/settings.json`
+ajoute ce stub aux chemins d'analyse du dépôt ; les imports de `GameContext`
+dans les scripts générés sont protégés par `TYPE_CHECKING` et ne s'exécutent
+pas dans le runtime Python embarqué.
+Un objet peut aussi avoir son propre fichier Python sélectionné ou créé depuis
+l'inspecteur. Ses hooks `_on_game_launch(game)` et `_on_update(game, delta_time)`
+sont exécutés pour cet objet, avec `game.object_id` et les méthodes `*_self`.
+La position courante en coordonnées de tuile est exposée en lecture seule par
+`game.x`, `game.y` et `game.z` dans ces callbacks.
+Les autres champs de l'inspecteur sont consultables par getters et
+`get_self_property` ; `set_self_property` met à jour les champs éditables ou
+les propriétés personnalisées.
+Chaque objet conserve une instance distincte du module ; ses callbacks cessent
+d'être appelés lorsque l'objet est supprimé. Les détails figurent dans la
+référence de l'API Python.
+Les hooks `_on_update` reçoivent aussi un instantané clavier du frame avec
+`game.key_pressed`, `game.key_just_pressed` et `game.key_just_released`. Le
+clavier est capturé par la boucle winit et les états edge restent valables sur
+tous les scripts du même frame. Les scripts choisissent les touches avec des
+constantes typées (`game.keys.Z`, `game.keys.SHIFT`) ; les lettres suivent le
+caractère logique pour fonctionner sur différentes dispositions de clavier.
+Les logs d'information restent dans le panneau de l'éditeur, où les doublons
+consécutifs sont regroupés, pour éviter les écritures console synchrones par
+frame.
+
+L'API permet entre autres de créer, déplacer ou supprimer des objets, de changer
+des propriétés, de lire l'état clavier et d'écrire dans les logs. Les scripts
+restent du code de confiance : PyO3 ne constitue pas une sandbox. La lecture
+d'état global, les entrées souris, les événements de jeu, le débogage interactif,
+l'exécution en dehors de l'éditeur et le pipeline de déploiement restent à
+développer.
+
+## Démarrage
+
+```powershell
+cargo run -p editor
+```
+
+Le format `.isomaker` a actuellement `format_version = 1`. Toute évolution
+incompatible de la structure persistée devra faire évoluer cette version et
+prévoir la stratégie de migration ou de rejet des anciens fichiers.
