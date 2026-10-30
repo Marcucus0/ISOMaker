@@ -38,6 +38,17 @@ pub enum GameCommand {
         key: String,
         value: serde_json::Value,
     },
+    /// Charge une autre scène du monde et empile la scène courante.
+    LoadScene { name: String },
+    /// Quitte la scène active et revient à la scène précédente de la pile.
+    UnloadScene,
+    /// Transfers an existing object into another world scene.
+    TransferObject {
+        object_id: String,
+        scene_name: String,
+        x: i32,
+        y: i32,
+    },
     /// Message de log émis depuis Python.
     Log {
         /// Script Python à l'origine du message.

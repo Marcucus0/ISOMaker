@@ -167,6 +167,18 @@ Les modifications sont mises en file et appliquées après le callback Python.
 Un appel à `get_self_property` dans le même callback ne voit donc pas une
 modification mise en file juste avant.
 
+Les propriétés déclarées dans un type d'objet personnalisé restent accessibles
+avec les mêmes fonctions. Une propriété `destination_scene` de type **Scène**
+est une chaîne choisie dans la liste des scènes du projet :
+
+```python
+def _on_area_entered(game: GameContext, other: GameObject) -> None:
+    if other.name == "Personage":
+        destination = game.get_self_property("destination_scene")
+        game.transfer_object(other.id, destination, 2, 3)
+        game.load_scene(destination)
+```
+
 Changer `script` pendant une session modifie la référence de l'objet ; le
 nouveau script sera chargé au prochain lancement.
 
@@ -188,15 +200,93 @@ Dans un script du monde, `game.object_id` vaut `None` et les trois méthodes
 
 Les scripts d'objet n'ont pas encore de hook d'arrêt dédié.
 
+### Zones et événements de contact
+
+Un objet dont le script définit au moins un hook de zone agit comme une zone
+rectangulaire. Son empreinte, réglable dans **Inspecteur → Transformation**,
+définit sa taille en tuiles. Les objets qui la recouvrent au même étage
+déclenchent un événement. Il n'est pas nécessaire d'activer les collisions
+physiques pour utiliser une zone.
+
+Les événements sont appelés sur le script de l'objet qui porte la zone. Le
+second argument est un instantané `GameObject` de l'objet détecté :
+
+```python
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from engine_api import GameContext, GameObject
+
+
+def _on_area_entered(game: GameContext, other: GameObject) -> None:
+    """Appelé une fois quand un objet entre dans la zone."""
+    if other.name == "Personnage":
+        game.log("La plaque de pression est activée")
+
+
+def _on_area_stayed(game: GameContext, other: GameObject) -> None:
+    """Appelé à chaque frame tant que l'objet reste dans la zone."""
+    pass
+
+
+def _on_area_exited(game: GameContext, other: GameObject) -> None:
+    """Appelé une fois quand l'objet quitte la zone."""
+    if other.name == "Personnage":
+        game.log("La plaque de pression est relâchée")
+```
+
+La détection compare les empreintes rectangulaires sur la grille et exige le
+même étage `Z`. Les événements de contact sont calculés après les mises à jour
+Python de la frame ; les commandes émises par un callback de zone sont
+appliquées immédiatement après ce callback. Le hook `stayed` est facultatif ;
+définis seulement `entered` et `exited` si la zone n'a besoin que de transitions.
+
 ## Fonctions disponibles sur `game`
+
+### Changer de scène pendant la Lecture
+
+`game.load_scene(name)` active la scène dont le nom correspond exactement et
+empile la scène courante. `game.unload_scene()` quitte la scène active et
+revient à la précédente ; si la pile est vide, le moteur écrit un avertissement.
+Les définitions de toutes les scènes restent dans le projet. Les scripts des
+objets sont préparés au démarrage, mais seuls ceux de la scène active reçoivent
+les callbacks de mise à jour. L'état d'exécution d'un script d'objet est
+conservé quand on quitte puis recharge sa scène.
+
+```python
+def _on_update(game: GameContext, delta_time: float) -> None:
+    if game.key_just_pressed(game.keys.ENTER):
+        game.load_scene("Donjon")
+
+    if game.key_just_pressed(game.keys.ESCAPE):
+        game.unload_scene()
+```
+
+Pour franchir une porte avec un objet (par exemple le personnage), utilise
+`game.transfer_object(object_id, scene_name, x, y)`. L'objet est déplacé vers
+la scène nommée sans activer celle-ci ; son UUID, son script et ses propriétés
+sont conservés. L'étage `Z` reste identique. Pour y entrer, appelle séparément
+`game.load_scene(scene_name)`. Les collisions dans la scène de destination
+bloquent le transfert si l'objet a les collisions activées.
+
+```python
+def _on_area_entered(game: GameContext, other: GameObject) -> None:
+    if other.name == "Personage":
+        game.transfer_object(other.id, "Intérieur", 2, 3)
+        game.load_scene("Intérieur")
+```
 
 | Fonction | Effet |
 |---|---|
+| `game.transfer_object(object_id, scene_name, x, y)` | Déplace l'objet vers la scène nommée sans l'activer. |
 | `game.spawn(name, object_type, x, y)` | Demande la création d'un objet à une position de tuile. |
 | `game.destroy(object_id)` | Demande la suppression de l'objet portant cet UUID. |
 | `game.move_object(object_id, x, y)` | Demande le déplacement d'un objet existant. |
 | `game.set_property(object_id, key, value)` | Modifie un champ d'objet éditable ou une propriété personnalisée. |
 | `game.set_global(key, value)` | Émet une commande de valeur globale ; actuellement l'éditeur l'inscrit dans le journal, sans fournir de stockage/lecture de variables globales. |
+| `game.load_scene(name)` | Charge la scène de nom exact et empile la scène précédente. |
+| `game.unload_scene()` | Quitte la scène courante et revient à la scène précédente de la pile. |
 | `game.log(message)` | Écrit un message d'information dans le journal de l'éditeur, préfixé par le fichier script et le nom de l'objet si disponible. |
 | `game.log_warning(message)` | Écrit un avertissement avec la même origine. |
 | `game.log_error(message)` | Écrit une erreur avec la même origine. |
@@ -325,8 +415,6 @@ menu **Monde** utilise les hooks préfixés par `_on_` ci-dessus. Les exceptions
 Python sont remontées dans le journal de l'éditeur avec le chemin et le nom du
 hook.
 
-L'API fournit des instantanés en lecture seule des objets et de leurs champs,
-mais pas la lecture/écriture de variables globales, les entrées souris, ni les
-événements de jeu. `spawn` ne renvoie pas l'identifiant créé. L'API ne constitue
+L'API fournit des instantanés en lecture seule des objets et de leurs champs, mais pas la lecture/écriture de variables globales, les entrées souris ni les événements génériques hors des zones. Les zones disposent des hooks décrits plus haut. `spawn` ne renvoie pas l'identifiant créé. L'API ne constitue
 pas une sandbox :
 les scripts chargés sont du code Python de confiance.

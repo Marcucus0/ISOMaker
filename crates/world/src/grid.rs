@@ -19,6 +19,9 @@ pub struct TileDefinition {
     /// Choisit une orientation stable pseudo-aléatoire par tuile pour la texture.
     #[serde(default)]
     pub randomize_texture_rotation: bool,
+    /// Garde cette tuile visible dans l'éditeur, mais la masque en Lecture.
+    #[serde(default)]
+    pub editor_only: bool,
 }
 
 impl TileDefinition {
@@ -30,6 +33,7 @@ impl TileDefinition {
             texture: None,
             has_collisions: false,
             randomize_texture_rotation: false,
+            editor_only: false,
         }
     }
 }

@@ -1,22 +1,17 @@
 //! Panneaux latéraux de l'éditeur.
 //!
-//! - Gauche : hiérarchie de la scène, palette de tuiles, construction modulaire & prefabs, assets.
+//! - Gauche : hiérarchie de la scène, palette de tuiles et gestionnaire de fichiers du projet.
 
 use egui::Ui;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use world::{
     grid::TileDefinition,
-    object::ObjectId,
-    prefab::{BuildingModuleKind, Prefab},
+    object::{CustomObjectTypeDefinition, CustomPropertyDefinition, CustomPropertyKind, ObjectId, PropValue},
     scene::Scene,
 };
-
-#[derive(Debug, Clone)]
-pub enum BuildDragPayload {
-    Module(BuildingModuleKind),
-    Prefab(Prefab),
-}
+use uuid::Uuid;
 
 /// Onglets du panneau gauche.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -24,7 +19,7 @@ pub enum LeftPanelTab {
     #[default]
     Hierarchy,
     Tiles,
-    Prefabs,
+    ObjectTypes,
     Assets,
 }
 
@@ -33,6 +28,9 @@ pub struct LeftPanel {
     pub tab: LeftPanelTab,
     /// Type de tuile sélectionné pour la palette.
     pub selected_tile_type: u16,
+    selected_object_type: Option<Uuid>,
+    pending_object_type_deletion: Option<Uuid>,
+    tile_preview_cache: HashMap<String, Option<egui::TextureHandle>>,
     browser_root: Option<PathBuf>,
     browser_current: Option<PathBuf>,
     browser_scan_path: Option<PathBuf>,
@@ -53,6 +51,7 @@ enum BrowserDialog {
     CreateFile(PathBuf),
     CreateDirectory(PathBuf),
     Rename(PathBuf),
+    Delete(PathBuf),
 }
 
 impl Default for LeftPanel {
@@ -60,6 +59,9 @@ impl Default for LeftPanel {
         Self {
             tab: LeftPanelTab::Hierarchy,
             selected_tile_type: 1,
+            selected_object_type: None,
+            pending_object_type_deletion: None,
+            tile_preview_cache: HashMap::new(),
             browser_root: None,
             browser_current: None,
             browser_scan_path: None,
@@ -84,7 +86,7 @@ impl LeftPanel {
 
     /// Affiche le panneau gauche.
     ///
-    /// Retourne l'action demandée par l'utilisateur (sélection, ajout, instanciation prefab).
+    /// Retourne l'action demandée par l'utilisateur (sélection ou ajout).
     pub fn show(
         &mut self,
         ui: &mut Ui,
@@ -93,25 +95,27 @@ impl LeftPanel {
         project_root: Option<&Path>,
         active_project_file: Option<&Path>,
         tile_definitions: &mut Vec<TileDefinition>,
+        object_types: &mut Vec<CustomObjectTypeDefinition>,
+        scene_names: &[String],
     ) -> PanelAction {
         // ── Onglets ──────────────────────────────────────────────────────────
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.tab, LeftPanelTab::Hierarchy, "📋 Scène");
             ui.selectable_value(&mut self.tab, LeftPanelTab::Tiles,     "🎨 Tuiles");
-            ui.selectable_value(&mut self.tab, LeftPanelTab::Prefabs,   "🏗 Bâtiments");
+            ui.selectable_value(&mut self.tab, LeftPanelTab::ObjectTypes, "◈ Types");
             ui.selectable_value(&mut self.tab, LeftPanelTab::Assets,    "📁 Assets");
         });
         ui.separator();
 
         let action = match self.tab {
             LeftPanelTab::Hierarchy => {
-                self.show_hierarchy(ui, scene, current_selection)
+                self.show_hierarchy(ui, scene, current_selection, object_types)
             }
             LeftPanelTab::Tiles => {
-                self.show_tile_palette(ui, tile_definitions)
+                self.show_tile_palette(ui, tile_definitions, active_project_file.and_then(Path::parent))
             }
-            LeftPanelTab::Prefabs => {
-                self.show_prefabs(ui)
+            LeftPanelTab::ObjectTypes => {
+                self.show_object_types(ui, object_types, scene_names)
             }
             LeftPanelTab::Assets => {
                 self.show_assets(ui, project_root, active_project_file)
@@ -127,6 +131,7 @@ impl LeftPanel {
         ui: &mut Ui,
         scene: &mut Scene,
         current_selection: &mut Option<ObjectId>,
+        object_types: &[CustomObjectTypeDefinition],
     ) -> PanelAction {
         let mut action = PanelAction::None;
 
@@ -136,6 +141,11 @@ impl LeftPanel {
         // Bouton d'ajout rapide.
         if ui.button("+ Ajouter objet générique").clicked() {
             action = PanelAction::AddObject;
+        }
+        for definition in object_types {
+            if ui.button(format!("+ Ajouter {}", definition.name)).clicked() {
+                action = PanelAction::AddCustomObject(definition.id);
+            }
         }
         if ui.button("+ Ajouter caméra").clicked() {
             action = PanelAction::AddCamera;
@@ -175,27 +185,46 @@ impl LeftPanel {
     }
 
     /// Palette de tuiles : sélecteur du type à peindre.
-    fn show_tile_palette(&mut self, ui: &mut Ui, tiles: &mut Vec<TileDefinition>) -> PanelAction {
+    fn show_tile_palette(
+        &mut self,
+        ui: &mut Ui,
+        tiles: &mut Vec<TileDefinition>,
+        asset_root: Option<&Path>,
+    ) -> PanelAction {
         let mut action = PanelAction::None;
         ui.label("Tuiles du projet");
         ui.separator();
-        egui::Grid::new("tile_palette")
-            .num_columns(2)
-            .spacing([4.0, 4.0])
-            .show(ui, |ui| {
-                for tile in tiles.iter() {
-                    let selected = self.selected_tile_type == tile.id;
+        for tile in tiles.iter() {
+            ui.horizontal(|ui| {
+                let size = egui::Vec2::splat(18.0);
+                let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                let texture_id = tile.texture.as_deref().and_then(|path| {
+                    asset_root.and_then(|root| self.tile_preview_texture(ui.ctx(), root, path))
+                });
+                if let Some(texture_id) = texture_id {
+                    ui.painter().image(
+                        texture_id,
+                        rect,
+                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::Pos2::new(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                } else {
                     let color = egui::Color32::from_rgba_unmultiplied(
                         tile.color[0], tile.color[1], tile.color[2], tile.color[3],
                     );
-                    let label = format!("{} {}", if tile.texture.is_some() { "▧" } else { "◆" }, tile.name);
-                    if ui.selectable_label(selected, egui::RichText::new(label)
-                        .color(if selected { color } else { egui::Color32::GRAY })).clicked() {
-                        self.selected_tile_type = tile.id;
-                    }
-                    ui.end_row();
+                    ui.painter().rect_filled(rect, 1.0, color);
+                }
+                ui.painter().rect_stroke(
+                    rect,
+                    1.0,
+                    ui.visuals().widgets.noninteractive.bg_stroke,
+                );
+                let selected = self.selected_tile_type == tile.id;
+                if ui.selectable_label(selected, &tile.name).clicked() {
+                    self.selected_tile_type = tile.id;
                 }
             });
+        }
 
         let next_id = (1..=u16::MAX).find(|id| !tiles.iter().any(|tile| tile.id == *id));
         if ui.add_enabled(next_id.is_some(), egui::Button::new("＋ Ajouter une tuile personnalisée")).clicked() {
@@ -223,6 +252,10 @@ impl LeftPanel {
             });
             ui.checkbox(&mut tile.has_collisions, "Collisions activées");
             ui.checkbox(&mut tile.randomize_texture_rotation, "Orientation de texture aléatoire");
+            if tile.id > 6 {
+                ui.checkbox(&mut tile.editor_only, "Visible dans l'éditeur uniquement")
+                    .on_hover_text("Cette tuile reste visible dans l'éditeur et disparaît en Lecture.");
+            }
             ui.horizontal(|ui| {
                 if ui.button("Choisir une texture…").clicked() {
                     action = PanelAction::ChooseTileTexture(tile.id);
@@ -237,57 +270,119 @@ impl LeftPanel {
                 ui.label(egui::RichText::new("Aucune texture").small().weak());
             }
             ui.label(egui::RichText::new(format!("ID : {}", tile.id)).small().weak());
+            if tile.id > 6 && ui.button("Supprimer cette tuile…").clicked() {
+                action = PanelAction::DeleteTileDefinition(tile.id);
+            }
         }
         action
     }
 
-    /// Panneau de construction modulaire et préfabriqués.
-    fn show_prefabs(&mut self, ui: &mut Ui) -> PanelAction {
-        let mut action = PanelAction::None;
-
-        ui.label(egui::RichText::new("Modèles préfabriqués (Prefabs)").strong());
-        ui.label(egui::RichText::new("Assemblages complets de modules réutilisables").small().color(egui::Color32::GRAY));
-        ui.separator();
-
-        let house = Prefab::preset_house();
-        let house_drag = ui.dnd_drag_source(
-            egui::Id::new("drag_prefab_house"),
-            BuildDragPayload::Prefab(house.clone()),
-            |ui| ui.button("🏠 Maisonnette Type (glisser ou cliquer)"),
-        );
-        if house_drag.inner.clicked() {
-            action = PanelAction::InstantiatePrefab(house);
+    fn tile_preview_texture(
+        &mut self,
+        ctx: &egui::Context,
+        asset_root: &Path,
+        stored_path: &str,
+    ) -> Option<egui::TextureId> {
+        let key = format!("{}|{}", asset_root.display(), stored_path);
+        if !self.tile_preview_cache.contains_key(&key) {
+            let stored = Path::new(stored_path);
+            let path = if stored.is_absolute() { stored.to_owned() } else { asset_root.join(stored) };
+            let texture = image::open(path).ok().map(|image| {
+                let rgba = image.into_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                let pixels = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+                ctx.load_texture(key.clone(), pixels, egui::TextureOptions::NEAREST)
+            });
+            self.tile_preview_cache.insert(key.clone(), texture);
         }
+        self.tile_preview_cache.get(&key)
+            .and_then(Option::as_ref)
+            .map(egui::TextureHandle::id)
+    }
 
-        ui.add_space(8.0);
+    fn show_object_types(
+        &mut self,
+        ui: &mut Ui,
+        object_types: &mut Vec<CustomObjectTypeDefinition>,
+        _scene_names: &[String],
+    ) -> PanelAction {
+        let mut action = PanelAction::None;
+        ui.label(egui::RichText::new("Types d’objets du projet").strong());
+        ui.label(egui::RichText::new("Sélectionne un type pour modifier sa définition dans l’inspecteur.")
+            .small().color(egui::Color32::GRAY));
+
+        if ui.button("+ Créer un type d’objet").clicked() {
+            let mut number = 1;
+            let name = loop {
+                let candidate = format!("Nouveau type {number}");
+                if !object_types.iter().any(|definition| definition.name.eq_ignore_ascii_case(&candidate)) {
+                    break candidate;
+                }
+                number += 1;
+            };
+            let definition = CustomObjectTypeDefinition::new(name);
+            self.selected_object_type = Some(definition.id);
+            object_types.push(definition);
+            action = PanelAction::ObjectTypesChanged;
+        }
         ui.separator();
-        ui.label(egui::RichText::new("Modules individuels").strong());
 
-        let modules = [
-            BuildingModuleKind::Wall,
-            BuildingModuleKind::Door,
-            BuildingModuleKind::Window,
-            BuildingModuleKind::Roof,
-            BuildingModuleKind::Corner,
-            BuildingModuleKind::Stairs,
-            BuildingModuleKind::Pillar,
-            BuildingModuleKind::Decoration,
-        ];
-
-        for kind in modules {
-            let drag = ui.dnd_drag_source(
-                egui::Id::new(("drag_building_module", kind)),
-                BuildDragPayload::Module(kind),
-                |ui| ui.button(format!("{} (glisser ou cliquer)", kind.label())),
-            );
-            if drag.inner.clicked() {
-                action = PanelAction::AddModule(kind);
+        if object_types.is_empty() {
+            ui.label(egui::RichText::new("Aucun type défini.").italics().color(egui::Color32::GRAY));
+        } else {
+            if !self.selected_object_type.is_some_and(|id| object_types.iter().any(|definition| definition.id == id)) {
+                self.selected_object_type = object_types.first().map(|definition| definition.id);
+            }
+            let mut delete_requested = None;
+            for definition in object_types.iter() {
+                ui.horizontal(|ui| {
+                    let selected = self.selected_object_type == Some(definition.id);
+                    if ui.selectable_label(selected, format!("◈ {}", definition.name)).clicked() {
+                        self.selected_object_type = Some(definition.id);
+                    }
+                    if ui.small_button("×").on_hover_text("Supprimer ce type").clicked() {
+                        delete_requested = Some(definition.id);
+                    }
+                });
+            }
+            if delete_requested.is_some() {
+                self.pending_object_type_deletion = delete_requested;
             }
         }
 
+        if let Some(type_id) = self.pending_object_type_deletion {
+            let type_name = object_types.iter().find(|definition| definition.id == type_id)
+                .map(|definition| definition.name.clone()).unwrap_or_else(|| "ce type".to_owned());
+            let mut confirm = false;
+            let mut cancel = false;
+            egui::Window::new("Supprimer le type d’objet ?")
+                .id(egui::Id::new("delete_custom_object_type"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ui.ctx(), |ui| {
+                    ui.label(format!("Supprimer « {type_name} » ? Les instances seront conservées comme objets génériques."));
+                    ui.horizontal(|ui| {
+                        confirm = ui.button("Supprimer").clicked();
+                        cancel = ui.button("Annuler").clicked();
+                    });
+                    if ui.input(|input| input.key_pressed(egui::Key::Escape)) { cancel = true; }
+                    if ui.input(|input| input.key_pressed(egui::Key::Enter)) { confirm = true; }
+                });
+            if confirm {
+                action = PanelAction::DeleteCustomObjectType(type_id);
+                self.pending_object_type_deletion = None;
+                self.selected_object_type = None;
+            } else if cancel {
+                self.pending_object_type_deletion = None;
+            }
+        }
         action
     }
 
+    pub fn selected_object_type_id(&self) -> Option<Uuid> {
+        (self.tab == LeftPanelTab::ObjectTypes).then_some(self.selected_object_type).flatten()
+    }
     /// Mini gestionnaire de fichiers enraciné dans le dossier du projet.
     fn show_assets(
         &mut self,
@@ -417,6 +512,10 @@ impl LeftPanel {
                             ui.close_menu();
                         }
                     }
+                    if ui.button("Supprimer…").clicked() {
+                        self.browser_dialog = Some(BrowserDialog::Delete(entry.path.clone()));
+                        ui.close_menu();
+                    }
                 });
             }
         });
@@ -426,6 +525,7 @@ impl LeftPanel {
                 BrowserDialog::CreateFile(_) => "Créer un fichier",
                 BrowserDialog::CreateDirectory(_) => "Créer un dossier",
                 BrowserDialog::Rename(_) => "Renommer",
+                BrowserDialog::Delete(_) => "Supprimer",
             };
             let mut confirm = false;
             let mut cancel = false;
@@ -434,6 +534,20 @@ impl LeftPanel {
                 .collapsible(false)
                 .resizable(false)
                 .show(ui.ctx(), |ui| {
+                    if let BrowserDialog::Delete(path) = &dialog {
+                        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("cet élément");
+                        ui.label(format!("Supprimer « {name} » ?"));
+                        if path.is_dir() {
+                            ui.label("Le dossier et tout son contenu seront supprimés.");
+                        }
+                        ui.horizontal(|ui| {
+                            confirm = ui.button("Supprimer").clicked();
+                            cancel = ui.button("Annuler").clicked();
+                        });
+                        if ui.input(|input| input.key_pressed(egui::Key::Escape)) { cancel = true; }
+                        if ui.input(|input| input.key_pressed(egui::Key::Enter)) { confirm = true; }
+                        return;
+                    }
                     ui.label("Nom :");
                     let response = ui.text_edit_singleline(&mut self.browser_name);
                     response.request_focus();
@@ -450,12 +564,13 @@ impl LeftPanel {
                         cancel = ui.button("Annuler").clicked();
                     });
                 });
-            if confirm && !self.browser_name.trim().is_empty() {
-                let name = self.browser_name.trim();
+            if confirm {
                 action = match dialog {
-                    BrowserDialog::CreateFile(parent) => PanelAction::CreateFile(parent.join(name)),
-                    BrowserDialog::CreateDirectory(parent) => PanelAction::CreateDirectory(parent.join(name)),
-                    BrowserDialog::Rename(old) => PanelAction::RenamePath(old.clone(), old.with_file_name(name)),
+                    BrowserDialog::CreateFile(parent) if !self.browser_name.trim().is_empty() => PanelAction::CreateFile(parent.join(self.browser_name.trim())),
+                    BrowserDialog::CreateDirectory(parent) if !self.browser_name.trim().is_empty() => PanelAction::CreateDirectory(parent.join(self.browser_name.trim())),
+                    BrowserDialog::Rename(old) if !self.browser_name.trim().is_empty() => PanelAction::RenamePath(old.clone(), old.with_file_name(self.browser_name.trim())),
+                    BrowserDialog::Delete(path) => PanelAction::DeletePath(path.clone()),
+                    _ => PanelAction::None,
                 };
                 self.browser_dialog = None;
             } else if cancel {
@@ -528,11 +643,89 @@ pub enum PanelAction {
     CreateFile(PathBuf),
     CreateDirectory(PathBuf),
     RenamePath(PathBuf, PathBuf),
+    DeletePath(PathBuf),
     AddObject,
     AddCamera,
-    AddModule(BuildingModuleKind),
-    InstantiatePrefab(Prefab),
+    AddCustomObject(Uuid),
+    ObjectTypesChanged,
+    RenameCustomProperty(Uuid, String, String),
+    DeleteCustomObjectType(Uuid),
     SelectObject(ObjectId),
     DeleteObject(ObjectId),
+    DeleteTileDefinition(u16),
     ChooseTileTexture(u16),
+}
+
+pub(crate) fn custom_property_kind_label(kind: CustomPropertyKind) -> &'static str {
+    match kind {
+        CustomPropertyKind::Text => "Texte",
+        CustomPropertyKind::Integer => "Entier",
+        CustomPropertyKind::Float => "Décimal",
+        CustomPropertyKind::Boolean => "Booléen",
+        CustomPropertyKind::Scene => "Scène",
+    }
+}
+
+pub(crate) fn default_custom_property_value(kind: CustomPropertyKind, scene_names: &[String]) -> PropValue {
+    match kind {
+        CustomPropertyKind::Text => PropValue::Str(String::new()),
+        CustomPropertyKind::Integer => PropValue::Int(0),
+        CustomPropertyKind::Float => PropValue::Float(0.0),
+        CustomPropertyKind::Boolean => PropValue::Bool(false),
+        CustomPropertyKind::Scene => PropValue::Str(scene_names.first().cloned().unwrap_or_default()),
+    }
+}
+
+pub(crate) fn show_custom_property_default(
+    ui: &mut Ui,
+    type_id: Uuid,
+    index: usize,
+    property: &mut CustomPropertyDefinition,
+    scene_names: &[String],
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label("Valeur initiale");
+        match (property.kind, &mut property.default_value) {
+            (CustomPropertyKind::Text, PropValue::Str(value)) => {
+                changed |= ui.text_edit_singleline(value).changed();
+            }
+            (CustomPropertyKind::Integer, PropValue::Int(value)) => {
+                changed |= ui.add(egui::DragValue::new(value)).changed();
+            }
+            (CustomPropertyKind::Float, PropValue::Float(value)) => {
+                changed |= ui.add(egui::DragValue::new(value).speed(0.1)).changed();
+            }
+            (CustomPropertyKind::Boolean, PropValue::Bool(value)) => {
+                changed |= ui.checkbox(value, "Activée").changed();
+            }
+            (CustomPropertyKind::Scene, PropValue::Str(value)) => {
+                let current_is_valid = scene_names.iter().any(|name| name == value);
+                if !current_is_valid {
+                    if let Some(first) = scene_names.first() {
+                        *value = first.clone();
+                        changed = true;
+                    }
+                }
+                egui::ComboBox::from_id_salt(("custom_property_scene", type_id, index))
+                    .selected_text(if value.is_empty() { "Choisir une scène…" } else { value.as_str() })
+                    .show_ui(ui, |ui| {
+                        for name in scene_names {
+                            changed |= ui.selectable_value(value, name.clone(), name).changed();
+                        }
+                    });
+            }
+            _ => {
+                property.default_value = default_custom_property_value(property.kind, scene_names);
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
+pub(crate) fn is_valid_property_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars.next().is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }

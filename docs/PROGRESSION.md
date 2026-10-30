@@ -20,6 +20,17 @@ complet prêt au déploiement.
 - **Projets et scènes** : un projet contient un monde, un monde contient
   plusieurs scènes. Le format `.isomaker` sérialise le projet complet et les
   dialogues Windows servent à ouvrir, enregistrer et enregistrer sous.
+  Dans l'éditeur, les scènes peuvent être renommées ou supprimées depuis leur
+  menu clic droit (la dernière scène est protégée). En Lecture, l'API Python
+  propose `game.load_scene(name)` et `game.unload_scene()` avec une pile de
+  navigation, ainsi que `game.transfer_object(id, scene_name, x, y)` pour
+  déplacer le même objet (UUID et propriétés conservés) entre scènes sans
+  changer la scène active. Le script peut appeler explicitement
+  `game.load_scene(scene_name)` pour l'activer. Le transfert respecte les collisions de destination ;
+  l'arrêt restaure le projet et la scène de départ. Le monde
+  possède une scène principale choisie dans ses paramètres, utilisée au début
+  de Lecture et par le lecteur autonome ; les anciens projets utilisent la
+  première scène.
 - **Fichiers du projet** : le panneau Assets sert de mini gestionnaire enraciné
   dans le dossier `<nom_du_projet>/` associé au fichier `.isomaker`. Il permet
   de naviguer dans les dossiers, d'ouvrir les fichiers avec l'application
@@ -36,11 +47,18 @@ complet prêt au déploiement.
   Pause, les commandes d'édition sont bloquées pour laisser le clavier au jeu.
 - **Tuiles personnalisées** : chaque projet démarre avec les six terrains
   historiques et peut ajouter ses propres tuiles. Leur nom, couleur, texture
-  PNG/JPEG ou GIF animé, collision et rotation pseudo-aléatoire de la texture
+  PNG/JPEG ou GIF animé, collision, rotation pseudo-aléatoire de la texture
+  et option « Visible dans l'éditeur uniquement » (masquée en Lecture)
   sont enregistrés dans le projet et dans ses fichiers `tiles/`; les textures
-  sont importées dans les assets propres au projet.
-- **Copier/coller de tuiles** : avec l'outil Sélection, `Ctrl+C` copie la tuile
-  seule sélectionnée et `Ctrl+V` la colle sur la tuile sélectionnée.
+  sont importées dans les assets propres au projet. Une tuile personnalisée
+  peut être supprimée après confirmation ; ses cases sont effacées dans toutes
+  les scènes et son fichier de définition est retiré lors de la sauvegarde.
+- **Copier/coller** : avec l'outil Sélection, `Ctrl+C` copie les objets
+  sélectionnés (ou une tuile seule si aucun objet n'est sélectionné) et
+  `Ctrl+V` les colle sous le pointeur. Les objets gardent leurs propriétés et
+  leurs écarts relatifs, reçoivent de nouveaux identifiants et peuvent être
+  collés dans une autre scène du même projet. Le presse-papiers est vidé lors
+  de l'ouverture d'un autre projet.
 - **Historique** : `Ctrl+Z` annule et `Ctrl+Y` rétablit la dernière modification
   de la scène.
 - **Confirmation de suppression** : une boîte de dialogue confirme la suppression
@@ -64,8 +82,8 @@ complet prêt au déploiement.
   grille peut être masquée pendant Lecture et Pause, et sa couleur est
   configurable.
 - **Sélection d'objets** : sélection rectangulaire avec `Shift`, surlignage,
-  déplacement temporaire avec aperçu et suppression. Les modules et prefabs du
-  panneau Bâtiments peuvent être glissés dans la scène.
+  déplacement temporaire avec aperçu et suppression. Le panneau Bâtiments et
+  l'outil Construire ont été retirés au profit des types d'objets personnalisés.
 - **Objets** : propriétés modifiables, collisions désactivées par défaut,
   propriété `Masqué` (false par défaut), texture vide par défaut, sélecteur de
   fichiers Windows, affichage des textures et option d'ajustement au losange
@@ -78,11 +96,23 @@ complet prêt au déploiement.
 - **Collisions de grille** : en Lecture, les déplacements des scripts sont
   bloqués par les tuiles et objets solides à la même élévation lorsque le mobile
   et l'obstacle ont tous deux les collisions activées. Le calcul utilise les
-  empreintes rectangulaires ; formes libres, poussée et événements de contact
-  restent à faire.
-- **Modèle de bâtiments** : modules et prefabs peuvent être instanciés. La
-  maison intégrée existe comme exemple ; ses textures se choisissent dans les
-  propriétés plutôt que d'être assignées automatiquement.
+  empreintes rectangulaires ; formes libres et poussée restent à faire.
+- **Zones de détection** : un objet dont le script définit `_on_area_entered`,
+  `_on_area_stayed` ou `_on_area_exited` détecte les autres empreintes
+  rectangulaires qui le recouvrent au même étage. L'empreinte se règle dans
+  l'inspecteur. Chaque hook reçoit `(game, other)` et les collisions physiques
+  ne sont pas nécessaires pour les événements de zone.
+- **Types d'objets personnalisés** : l'onglet **Types** permet de créer et
+  sélectionner des types ; leur définition s'édite dans l'inspecteur. On peut y
+  ajouter des propriétés texte, entières, décimales,
+  booléennes ou de type scène, puis d'ajouter les instances depuis l'onglet
+  **Scène**. Chaque type peut définir les valeurs initiales de ses propriétés
+  génériques : texture, collisions, visibilité, empreinte, rotation, couche et
+  script. Les propriétés déclarées et génériques sont copiées à la création ;
+  les valeurs restent propres à chaque instance. Les propriétés scène sont
+  choisies dans la liste des scènes du projet et sont actualisées quand une
+  scène est renommée ou supprimée. Types et valeurs sont sauvegardés dans
+  `.isomaker` ; les données legacy de bâtiments restent lisibles.
 - **Python** : runtime PyO3 et entrée **Monde → Script du monde**. Le script
   configuré est chargé à Lecture ; `_on_game_launch(game)` est appelé une fois
   et `_on_update(game, delta_time)` à chaque mise à jour. Le bouton **Créer un
@@ -118,31 +148,27 @@ complet prêt au déploiement.
   du monde ne changent pas la scène. Le tri complet des objets et la production
   des formes de grille restent à profiler avant une optimisation structurelle.
 
-- L'éditeur de plans réutilisables de bâtiments n'existe pas encore. Son
-  périmètre est listé dans [`todo list.md`](../todo%20list.md).
+- Le placement par glisser-déposer et les scripts ou textures par défaut partagés
+  par un type restent à ajouter si nécessaire.
 - La couleur de la grille est une préférence globale sauvegardée dans les
   paramètres de l'éditeur. L'option d'affichage de la grille en Lecture/Pause
   n'est pas persistée. Les dimensions de tuile existent dans les métadonnées de
   scène, sans UI dédiée.
 - L'export ne collecte pas encore les dépendances Python tierces utilisées par
   les scripts. Le ZIP doit être vérifié sur une installation Windows propre.
-- L'API Python expose les objets de scène sous forme d'instantanés en lecture
-  seule, mais pas encore l'état global du monde, les entrées souris ou les
-  événements ; le débogage interactif et les permissions de scripts tiers
-  restent à concevoir.
+- L'API Python expose les objets de scène sous forme d'instantanés en lecture seule, mais pas encore l'état global du monde, les entrées souris ni les événements génériques hors des zones. Le débogage interactif et les permissions de scripts tiers restent à concevoir.
 - Le format projet est en version 1. Les migrations entre versions restent à
   définir si le schéma évolue.
 
 ## Prochaines étapes proposées
 
-1. Construire l'éditeur visuel de plans de bâtiments décrit dans le TODO, puis
-   enregistrer les plans dans le projet et gérer leurs instances.
+1. Ajouter le placement par glisser-déposer des types d'objets et évaluer les
+   besoins de scripts ou textures par défaut partagés par un type.
 2. Étendre l'API Python avec lecture de l'état du monde, accès aux entrées souris
-   et événements de jeu, en gardant les échanges groupés par callback.
+   et autres événements de jeu, en gardant les échanges groupés par callback.
 3. Gérer les dépendances Python tierces de l'export, valider le ZIP sur une
    installation Windows propre et améliorer le débogage des scripts.
-4. Étendre les collisions avec des formes libres, la résolution de poussée et
-   des événements de contact exploitables par les scripts.
+4. Étendre les collisions avec des formes libres et la résolution de poussée.
 5. Ajouter une interface pour les dimensions de tuile et décider quels réglages
    de vue doivent être sauvegardés.
 6. Définir une stratégie de migration et de validation pour les versions

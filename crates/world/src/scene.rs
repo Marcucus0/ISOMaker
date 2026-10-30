@@ -112,12 +112,6 @@ impl Scene {
         self.add_object(obj)
     }
 
-    /// Instancie un Prefab complet dans la scène à la position logique donnée.
-    pub fn instantiate_prefab(&mut self, prefab: &crate::prefab::Prefab, pos: TilePos) -> Vec<ObjectId> {
-        let objects = prefab.instantiate_at(pos);
-        objects.into_iter().map(|obj| self.add_object(obj)).collect()
-    }
-
     /// Retourne les objets triés pour l'affichage isométrique (profondeur croissante).
     pub fn objects_sorted_for_render(&self) -> Vec<&SceneObject> {
         let mut objects: Vec<&SceneObject> = self.objects.values().collect();

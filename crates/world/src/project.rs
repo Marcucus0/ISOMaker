@@ -2,7 +2,11 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{grid::{default_tile_definitions, TileDefinition}, scene::Scene};
+use crate::{
+    grid::{default_tile_definitions, TileDefinition},
+    object::{CustomObjectTypeDefinition, CustomPropertyKind, PropValue},
+    scene::Scene,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct World {
@@ -12,6 +16,9 @@ pub struct World {
     pub script: Option<String>,
     pub scenes: Vec<Scene>,
     pub active_scene_index: usize,
+    /// Scène chargée au démarrage de la Lecture et du lecteur autonome.
+    #[serde(default)]
+    pub main_scene_index: usize,
 }
 
 impl World {
@@ -21,6 +28,7 @@ impl World {
             script: None,
             scenes: vec![Scene::new("Scène principale")],
             active_scene_index: 0,
+            main_scene_index: 0,
         }
     }
 
@@ -48,6 +56,26 @@ impl World {
         self.active_scene_index = index;
         true
     }
+
+    /// Supprime une scène par index, en conservant toujours au moins une scène.
+    /// Retourne `None` si l'index est invalide ou s'il s'agit de la dernière scène.
+    pub fn remove_scene(&mut self, index: usize) -> Option<Scene> {
+        if self.scenes.len() <= 1 || index >= self.scenes.len() {
+            return None;
+        }
+        let removed = self.scenes.remove(index);
+        if self.active_scene_index > index {
+            self.active_scene_index -= 1;
+        } else if self.active_scene_index == index {
+            self.active_scene_index = index.min(self.scenes.len() - 1);
+        }
+        if self.main_scene_index > index {
+            self.main_scene_index -= 1;
+        } else if self.main_scene_index == index {
+            self.main_scene_index = index.min(self.scenes.len() - 1);
+        }
+        Some(removed)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,6 +87,9 @@ pub struct Project {
     /// Définitions de tuiles isolées dans ce projet.
     #[serde(default = "default_tile_definitions")]
     pub tile_definitions: Vec<TileDefinition>,
+    /// Schémas de propriétés des types d'objets créés par l'utilisateur.
+    #[serde(default)]
+    pub object_types: Vec<CustomObjectTypeDefinition>,
 }
 
 impl Project {
@@ -68,6 +99,7 @@ impl Project {
             name: name.into(),
             world: World::new("Monde principal"),
             tile_definitions: default_tile_definitions(),
+            object_types: Vec::new(),
         }
     }
 
@@ -83,13 +115,48 @@ impl Project {
             project.world.active_scene_index < project.world.scenes.len(),
             "L'indice de la scène active est invalide"
         );
+        anyhow::ensure!(
+            project.world.main_scene_index < project.world.scenes.len(),
+            "L'indice de la scène principale est invalide"
+        );
         let mut tile_ids = std::collections::HashSet::new();
         for tile in &project.tile_definitions {
             anyhow::ensure!(tile.id != 0, "L'identifiant 0 est réservé à la tuile vide");
             anyhow::ensure!(tile_ids.insert(tile.id), "Identifiant de tuile dupliqué : {}", tile.id);
         }
+        let mut type_ids = std::collections::HashSet::new();
+        let mut type_names = std::collections::HashSet::new();
+        for object_type in &project.object_types {
+            anyhow::ensure!(type_ids.insert(object_type.id), "Identifiant de type d'objet dupliqué");
+            anyhow::ensure!(!object_type.name.trim().is_empty(), "Un type d'objet ne peut pas avoir un nom vide");
+            anyhow::ensure!(type_names.insert(object_type.name.to_lowercase()), "Nom de type d'objet dupliqué : {}", object_type.name);
+            let mut property_keys = std::collections::HashSet::new();
+            for property in &object_type.properties {
+                anyhow::ensure!(
+                    is_valid_custom_property_key(&property.key),
+                    "Clé de propriété personnalisée invalide : {}",
+                    property.key
+                );
+                anyhow::ensure!(property.key != "texture", "La clé `texture` est réservée");
+                anyhow::ensure!(property_keys.insert(property.key.as_str()), "Clé de propriété dupliquée : {}", property.key);
+                let value_matches_kind = matches!(
+                    (&property.kind, &property.default_value),
+                    (CustomPropertyKind::Text | CustomPropertyKind::Scene, PropValue::Str(_))
+                        | (CustomPropertyKind::Integer, PropValue::Int(_))
+                        | (CustomPropertyKind::Float, PropValue::Float(_))
+                        | (CustomPropertyKind::Boolean, PropValue::Bool(_))
+                );
+                anyhow::ensure!(value_matches_kind, "Valeur initiale incompatible avec le type de propriété `{}`", property.key);
+            }
+        }
         Ok(project)
     }
+}
+
+fn is_valid_custom_property_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars.next().is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
 #[cfg(test)]

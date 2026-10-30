@@ -22,6 +22,7 @@ Les chiffres ci-dessus sont générés depuis le dépôt. Pour les recalculer lo
 python scripts/update_readme.py
 ```
 
+
 ## Démarrer
 
 Prérequis : une installation récente de Rust (stable) et Python 3 pour les scripts et tests Python.

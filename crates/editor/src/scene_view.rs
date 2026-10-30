@@ -12,12 +12,10 @@ use world::{
     coords::{IsoProjection, ScreenPos, TilePos},
     grid::{TileData, TileDefinition},
     object::{ObjectId, ObjectType, Rotation4, SceneObject},
-    prefab::{BuildingModuleKind, Prefab},
     scene::Scene,
 };
 use crate::{
     camera::Camera,
-    panels::BuildDragPayload,
     toolbar::EditorTool,
 };
 
@@ -55,6 +53,8 @@ pub struct SceneView {
     delete_requested: Option<(Vec<ObjectId>, Vec<TilePos>)>,
     /// Données de tuile copiées dans l'éditeur.
     copied_tile: Option<TileData>,
+    /// Copied objects are kept in the view so they survive scene switches.
+    copied_objects: Option<Vec<SceneObject>>,
     copy_tile_requested: bool,
     paste_tile_requested: bool,
     /// Paint tile type courant.
@@ -121,6 +121,7 @@ impl Default for SceneView {
             selected_tiles: HashSet::new(),
             delete_requested: None,
             copied_tile: None,
+            copied_objects: None,
             copy_tile_requested: false,
             paste_tile_requested: false,
             paint_tile_type: 1,
@@ -153,9 +154,16 @@ impl SceneView {
         self.delete_requested.take()
     }
 
-    pub fn request_tile_clipboard_shortcut(&mut self, copy: bool) {
+    pub fn request_clipboard_shortcut(&mut self, copy: bool) {
         if copy { self.copy_tile_requested = true; }
         else { self.paste_tile_requested = true; }
+    }
+
+    pub fn clear_clipboard(&mut self) {
+        self.copied_tile = None;
+        self.copied_objects = None;
+        self.copy_tile_requested = false;
+        self.paste_tile_requested = false;
     }
 
     /// Affiche la vue scène dans le `Ui` donné.
@@ -171,6 +179,7 @@ impl SceneView {
         delta_time: f32,
         fps: Option<f32>,
         interactive: bool,
+        runtime_view: bool,
         show_grid: bool,
         show_camera_selector: bool,
         runtime_camera: &mut Option<ObjectId>,
@@ -260,21 +269,55 @@ impl SceneView {
             proj.screen_to_tile(ScreenPos::new(world.x, world.y))
         });
 
-        // Copier/coller une tuile avec le focus dans le viewport et l'outil Sélection.
+        // Copy/paste in the viewport while the Select tool is active.
         if interactive && active_tool == EditorTool::Select {
             let copy = std::mem::take(&mut self.copy_tile_requested);
             let paste = std::mem::take(&mut self.paste_tile_requested);
-            if copy && self.selected_tiles.len() == 1 {
-                if let Some(tile) = self.selected_tiles.iter().next().copied() {
-                    self.copied_tile = Some(scene.get_tile(tile));
+            if copy {
+                let mut object_ids: Vec<_> = self.selected_objects.iter().copied()
+                    .filter(|id| scene.get_object(*id).is_some())
+                    .collect();
+                if object_ids.is_empty() {
+                    object_ids.extend(self.selected_object.filter(|id| scene.get_object(*id).is_some()));
+                }
+                if !object_ids.is_empty() {
+                    object_ids.sort_by_key(|id| id.to_string());
+                    self.copied_objects = Some(object_ids.iter()
+                        .filter_map(|id| scene.get_object(*id).cloned())
+                        .collect());
+                    self.copied_tile = None;
+                } else if self.selected_tiles.len() == 1 {
+                    if let Some(tile) = self.selected_tiles.iter().next().copied() {
+                        self.copied_tile = Some(scene.get_tile(tile));
+                        self.copied_objects = None;
+                    }
                 }
             }
             if paste {
-                let destination = (self.selected_tiles.len() == 1)
+                let selected_tile = (self.selected_tiles.len() == 1)
                     .then(|| self.selected_tiles.iter().next().copied())
-                    .flatten()
-                    .or(self.hovered_tile);
-                if let (Some(tile), Some(data)) = (destination, self.copied_tile) {
+                    .flatten();
+                if let (Some(anchor), Some(objects)) = (self.hovered_tile.or(selected_tile), self.copied_objects.as_ref()) {
+                    if let Some(origin) = objects.iter().map(|object| object.tile_pos)
+                        .min_by_key(|pos| (pos.x, pos.y, pos.z))
+                    {
+                        let mut pasted_ids = HashSet::new();
+                        for source in objects {
+                            let mut object = source.clone();
+                            object.id = ObjectId::new();
+                            object.tile_pos = TilePos::with_z(
+                                anchor.x + source.tile_pos.x - origin.x,
+                                anchor.y + source.tile_pos.y - origin.y,
+                                anchor.z + source.tile_pos.z - origin.z,
+                            );
+                            pasted_ids.insert(scene.add_object(object));
+                        }
+                        self.selected_tiles.clear();
+                        self.selected_objects = pasted_ids;
+                        self.selected_object = sole_object(&self.selected_objects);
+                        modified = true;
+                    }
+                } else if let (Some(tile), Some(data)) = (selected_tile.or(self.hovered_tile), self.copied_tile) {
                     if scene.get_tile(tile) != data {
                         if data.is_empty() { scene.clear_tile(tile); }
                         else { scene.set_tile(tile, data); }
@@ -288,31 +331,6 @@ impl SceneView {
             }
         }
 
-        let dropped_build_payload = if interactive {
-            response.dnd_release_payload::<BuildDragPayload>()
-        } else {
-            None
-        };
-        if let (Some(payload), Some(tile)) = (&dropped_build_payload, self.hovered_tile) {
-            match payload.as_ref() {
-                BuildDragPayload::Prefab(prefab) => {
-                    let ids = scene.instantiate_prefab(prefab, tile);
-                    self.selected_object = ids.first().copied();
-                    modified |= !ids.is_empty();
-                }
-                BuildDragPayload::Module(kind) => {
-                    let object = module_object(*kind, tile);
-                    self.selected_object = Some(scene.add_object(object));
-                    modified = true;
-                }
-            }
-            self.selected_tiles.clear();
-        }
-        let build_drag_hover = if interactive {
-            response.dnd_hover_payload::<BuildDragPayload>()
-        } else {
-            None
-        };
 
         // Sélection par clic ou rectangle de tuiles.
         if active_tool == EditorTool::Select && !self.is_panning {
@@ -531,7 +549,7 @@ impl SceneView {
         painter.rect_filled(rect, 0.0, Color32::from_rgb(30, 35, 40));
 
         // ── Dessin de la grille et des tuiles ─────────────────────────────────
-        self.draw_grid(ui, scene, tile_definitions, asset_root, &painter, &proj, center, rect, show_grid);
+        self.draw_grid(ui, scene, tile_definitions, asset_root, &painter, &proj, center, rect, show_grid, runtime_view);
 
         // Les données réelles restent en place jusqu'au relâchement du clic.
         if response.dragged_by(egui::PointerButton::Primary)
@@ -547,30 +565,12 @@ impl SceneView {
         if active_tool == EditorTool::Select && self.selection_objects_only {
             self.draw_object_selection_bounds(&painter, &proj, center);
         }
-        if let Some(payload) = build_drag_hover {
-            if let Some(tile) = self.hovered_tile {
-                match payload.as_ref() {
-                    BuildDragPayload::Prefab(prefab) => {
-                        self.draw_build_preview(prefab, tile, &painter, &proj, center);
-                    }
-                    BuildDragPayload::Module(kind) => {
-                        self.draw_module_preview(*kind, tile, &painter, &proj, center);
-                    }
-                }
-            }
-        } else if active_tool == EditorTool::Build {
-            if let Some(tile) = self.hovered_tile {
-                self.draw_build_preview(&Prefab::preset_house(), tile, &painter, &proj, center);
-            }
-        }
-
         // ── Dessin des objets ─────────────────────────────────────────────────
         self.draw_objects(ui.ctx(), scene, &painter, &proj, center, rect, asset_root, interactive);
 
         // ── Interactions (paint, sélection) ──────────────────────────────────
         if response.clicked_by(egui::PointerButton::Primary)
             && !self.is_panning
-            && dropped_build_payload.is_none()
         {
             if let Some(tile) = self.hovered_tile {
                 match active_tool {
@@ -603,11 +603,6 @@ impl SceneView {
                                 modified = true;
                             }
                         }
-                    }
-                    EditorTool::Build => {
-                        let ids = scene.instantiate_prefab(&Prefab::preset_house(), tile);
-                        self.selected_object = ids.first().copied();
-                        modified = !ids.is_empty();
                     }
                     _ => {}
                 }
@@ -672,6 +667,7 @@ impl SceneView {
         center: Vec2,
         rect: Rect,
         show_grid: bool,
+        runtime_view: bool,
     ) {
         let zoom = self.camera.zoom;
         let definitions_by_id: HashMap<u16, &TileDefinition> = tile_definitions
@@ -691,7 +687,7 @@ impl SceneView {
         let step = if detailed { 1 } else { (2.0 / zoom).ceil() as i32 };
 
         if !detailed {
-            self.draw_low_zoom_tiles(scene, &definitions_by_id, painter, proj, center, rect, cam_tile, tile_range);
+            self.draw_low_zoom_tiles(scene, &definitions_by_id, painter, proj, center, rect, cam_tile, tile_range, runtime_view);
         }
 
         // Anchor coarse grid vertices to world coordinates, not to the camera
@@ -731,6 +727,8 @@ impl SceneView {
                     let tile_data = scene.get_tile(tile);
                     if !tile_data.is_empty() {
                         let definition = definitions_by_id.get(&tile_data.tile_type).copied();
+                        let editor_only = runtime_view && definition.is_some_and(|definition| definition.editor_only);
+                        if !editor_only {
                         let texture = definition.and_then(|definition| definition.texture.as_deref())
                             .and_then(|path| self.load_tile_texture_id(ui.ctx(), asset_root, path));
                         if let Some(texture_id) = texture {
@@ -757,8 +755,9 @@ impl SceneView {
                                 corners.to_vec(), tile_type_color(tile_data.tile_type, &definitions_by_id), Stroke::NONE,
                             ));
                         }
+                        }
                     }
-                    if self.selected_tiles.contains(&tile) {
+                    if !runtime_view && self.selected_tiles.contains(&tile) {
                         painter.add(egui::Shape::convex_polygon(
                             corners.to_vec(),
                             Color32::from_rgba_unmultiplied(70, 150, 255, 34),
@@ -802,6 +801,7 @@ impl SceneView {
         rect: Rect,
         camera_tile: TilePos,
         tile_range: i32,
+        runtime_view: bool,
     ) {
         let chunk_size = world::grid::CHUNK_SIZE;
         let min_chunk_x = (camera_tile.x - tile_range).div_euclid(chunk_size) - 1;
@@ -835,6 +835,9 @@ impl SceneView {
 
                 for (index, data) in chunk.tiles.iter().copied().enumerate() {
                     if data.is_empty() { continue; }
+                    if runtime_view && definitions_by_id.get(&data.tile_type).is_some_and(|definition| definition.editor_only) {
+                        continue;
+                    }
                     let tile = TilePos::new(
                         chunk_x * chunk_size + (index as i32 % chunk_size),
                         chunk_y * chunk_size + (index as i32 / chunk_size),
@@ -1165,77 +1168,6 @@ impl SceneView {
         );
     }
 
-    fn draw_build_preview(
-        &self,
-        prefab: &Prefab,
-        base: TilePos,
-        painter: &Painter,
-        proj: &IsoProjection,
-        center: Vec2,
-    ) {
-        let zoom = self.camera.zoom;
-        let half_width = proj.half_width() * zoom;
-        let half_height = proj.half_height() * zoom;
-        let fill = Color32::from_rgba_unmultiplied(100, 180, 255, 75);
-        let outline = Stroke::new(1.5_f32, Color32::from_rgb(190, 220, 255));
-
-        for element in &prefab.elements {
-            let tile = TilePos::with_z(
-                base.x + element.relative_pos.x,
-                base.y + element.relative_pos.y,
-                base.z + element.relative_pos.z,
-            );
-            let screen = self.tile_to_screen(tile, proj, center);
-            let corners = [
-                egui::pos2(screen.x, screen.y - half_height),
-                egui::pos2(screen.x + half_width, screen.y),
-                egui::pos2(screen.x, screen.y + half_height),
-                egui::pos2(screen.x - half_width, screen.y),
-            ];
-            painter.add(egui::Shape::convex_polygon(corners.to_vec(), fill, outline));
-            if zoom >= 0.7 {
-                painter.text(
-                    screen,
-                    egui::Align2::CENTER_CENTER,
-                    element.module_kind.label(),
-                    egui::FontId::proportional(9.0 * zoom),
-                    Color32::WHITE,
-                );
-            }
-        }
-    }
-
-    fn draw_module_preview(
-        &self,
-        kind: BuildingModuleKind,
-        tile: TilePos,
-        painter: &Painter,
-        proj: &IsoProjection,
-        center: Vec2,
-    ) {
-        let screen = self.tile_to_screen(tile, proj, center);
-        let half_width = proj.half_width() * self.camera.zoom;
-        let half_height = proj.half_height() * self.camera.zoom;
-        let corners = [
-            egui::pos2(screen.x, screen.y - half_height),
-            egui::pos2(screen.x + half_width, screen.y),
-            egui::pos2(screen.x, screen.y + half_height),
-            egui::pos2(screen.x - half_width, screen.y),
-        ];
-        painter.add(egui::Shape::convex_polygon(
-            corners.to_vec(),
-            Color32::from_rgba_unmultiplied(100, 180, 255, 90),
-            Stroke::new(1.5_f32, Color32::from_rgb(190, 220, 255)),
-        ));
-        painter.text(
-            screen,
-            egui::Align2::CENTER_CENTER,
-            kind.label(),
-            egui::FontId::proportional(9.0 * self.camera.zoom),
-            Color32::WHITE,
-        );
-    }
-
     fn draw_object_selection_bounds(
         &self,
         painter: &Painter,
@@ -1406,19 +1338,6 @@ fn show_runtime_camera_selector(
                 });
             });
         });
-}
-
-fn module_object(kind: BuildingModuleKind, mut tile: TilePos) -> SceneObject {
-    if kind == BuildingModuleKind::Roof {
-        tile.z += 1;
-    }
-    let mut object = SceneObject::new(kind.label(), ObjectType::Building, tile);
-    if kind == BuildingModuleKind::Roof {
-        object.layer = world::Layer::Foreground;
-    } else {
-        object.layer = world::Layer::Buildings;
-    }
-    object
 }
 
 fn erase_tile(scene: &mut Scene, tile: TilePos) -> bool {

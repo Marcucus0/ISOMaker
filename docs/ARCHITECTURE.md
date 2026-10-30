@@ -26,7 +26,7 @@ flowchart LR
 
 | Crate | Responsabilité actuelle |
 |---|---|
-| `crates/world` | Modèles sérialisables du projet, du monde, des scènes, des tuiles, des objets et des prefabs ; coordonnées et projection isométriques. |
+| `crates/world` | Modèles sérialisables du projet, du monde, des scènes, des tuiles et des objets ; coordonnées et projection isométriques. |
 | `crates/editor` | Application `egui`/`winit`, caméra, outils de scène, inspecteur, panneaux, sauvegarde et chargement des projets. |
 | `crates/renderer` | Initialisation `wgpu` et primitives de texture GPU. |
 | `crates/assets` | Types de handles, registre/cache et chargement d'images PNG/JPEG. |
@@ -58,7 +58,7 @@ La hiérarchie persistante est :
 
 ```text
 Project (un monde)
-└── World (script Python, plusieurs scènes et index de la scène active)
+└── World (script Python, plusieurs scènes, scène active et scène principale)
     └── Scene (métadonnées, grille, objets)
 ```
 
@@ -68,9 +68,21 @@ les six types historiques sont fournis par défaut et les définitions ajoutées
 sont propres au projet. Elles sont sérialisées dans `.isomaker` et écrites dans
 `<projet>/tiles/tile-<id>.json`. Une définition contient son identifiant, son
 nom, sa couleur, une texture facultative (PNG, JPEG ou GIF animé), un indicateur
-de collision et une option de rotation pseudo-aléatoire de la texture par case. Les
-textures sont importées dans les assets du projet. La collision est une
+de collision, une option de rotation pseudo-aléatoire de la texture par case et
+un indicateur `editor_only`. Ces tuiles restent visibles dans l'éditeur et sont
+omises du rendu en Lecture, y compris à faible zoom. Les anciens projets
+chargent ce champ à `false`. Les textures sont importées dans les assets du
+projet. Une définition personnalisée peut être supprimée après confirmation ;
+les cases qui la référencent sont effacées dans toutes les scènes et les fichiers
+`tile-<id>.json` obsolètes sont retirés à l'enregistrement. La collision est une
 métadonnée utilisée pendant les déplacements en Lecture.
+Les types d'objets personnalisés sont aussi sérialisés dans `.isomaker`, avec un
+UUID stable, un nom et un schéma de propriétés typées. Les valeurs par défaut génériques du type sont aussi sérialisées et copiées aux nouvelles instances. Les champs texte, entiers,
+décimaux, booléens et scène ont une valeur initiale copiée à la création de
+chaque instance ; les valeurs des instances sont indépendantes. Le champ scène
+est choisi dans la liste des scènes existantes. Les modifications de schéma
+synchronisent les instances, et renommer ou supprimer une scène actualise les
+valeurs de scène qui la référencent.
 La grille est clairsemée : seules les données
 non vides sont réparties dans des chunks de 16 × 16 tuiles. Les objets ont un
 identifiant stable, une position logique, une empreinte, une couche, des
@@ -150,8 +162,12 @@ contrôle dédié dans l'UI.
   compris pendant un glisser.
 - **Sélection** : sélectionne une tuile ou une zone logique. `Shift` sélectionne
   les objets compris dans le rectangle sans sélectionner ni teinter les tuiles.
-  Une tuile seule peut être copiée avec `Ctrl+C` puis collée sur la tuile
-  sélectionnée avec `Ctrl+V`. Les données copiées restent dans l'éditeur.
+  Les objets sélectionnés peuvent être copiés avec `Ctrl+C` et collés sous le
+  pointeur avec `Ctrl+V` ; leurs propriétés et écarts relatifs sont conservés,
+  mais chaque copie reçoit un nouvel identifiant. Le presse-papiers de l'éditeur
+  persiste lors des changements de scène, ce qui permet le collage entre scènes
+  du même projet. Si aucun objet n'est sélectionné, le raccourci conserve le
+  copier/coller d'une tuile seule.
 - **Déplacer** : déplace la zone sélectionnée avec un aperçu temporaire. Sans
   sélection, déplace l'objet touché, ou la tuile sous le pointeur. Les objets
   déplacés sont identifiés par leur empreinte visuelle.
@@ -169,6 +185,23 @@ contrôle dédié dans l'UI.
   `Ctrl+Z` annule et `Ctrl+Y` rétablit la dernière modification.
 - **Simulation** : `F9` lance ou reprend Lecture, `F10` arrête, `F11` met en
   pause.
+- **Gestion des scènes en Lecture** : `game.load_scene(nom)` dans un script
+  Python active une scène du monde et empile la scène quittée. `game.unload_scene()`
+  revient à la scène précédente. Toutes les scènes restent sauvegardées dans le
+  projet ; `game.transfer_object(id, nom, x, y)` déplace un objet existant vers
+  une autre scène sans l'activer, en conservant son UUID, son script, ses propriétés
+  et son étage. Le script choisit séparément d'appeler `game.load_scene(nom)`.
+  Un transfert refusé par les collisions ne retire pas l'objet de sa scène d'origine.
+  Les scripts de toutes les scènes sont chargés au lancement, mais seuls
+  les scripts de la scène active sont mis à jour. Les modules Python gardent
+  leur état lorsqu'une scène est quittée puis rechargée. Arrêter la Lecture
+  restaure le projet complet et la scène active de départ.
+- La propriété `World.main_scene_index` sélectionne la scène de démarrage.
+  Elle se règle dans **Monde → Scène principale (Main)** et retombe sur
+  l'index `0` dans les anciens projets.
+- **Gestion des scènes dans l'éditeur** : le menu **Scènes** permet de changer
+  de scène ; clic droit sur une entrée permet de la renommer ou de la supprimer.
+  La dernière scène ne peut pas être supprimée.
 - **Paramètres éditeur** : **Fichier → Paramètres de l'éditeur** ouvre les
   préférences propres à l'application. Elles sont enregistrées séparément du
   projet dans `%APPDATA%/MoteurDeJeu/editor_settings.json`. L'option de masquage
@@ -179,8 +212,17 @@ contrôle dédié dans l'UI.
   ellipse ajoutée.
 - **Projets récents** : le sous-menu **Fichier → Projets récents** garde les dix
   derniers projets ouverts ou enregistrés dans les paramètres globaux de l'éditeur.
-- **Glisser-déposer** : les modules et prefabs du panneau Bâtiments peuvent être
-  déposés dans la scène avec un aperçu de placement.
+- **Création de types d'objets** : l'onglet **Types** permet de créer et sélectionner des types ; leur définition
+  (nom, valeurs initiales, propriétés génériques et typées) s'édite dans
+  l'inspecteur. Chaque type définit aussi les valeurs initiales génériques
+  (collisions, visibilité, ajustement et texture, empreinte, rotation, couche et
+  script). La texture et le script peuvent être choisis avec les dialogues de fichiers Windows et sont importés dans le projet. Ces
+  valeurs sont copiées à la création ; chaque instance conserve ensuite ses
+  modifications. Les instances s'ajoutent depuis l'onglet **Scène**. Les
+  propriétés de type **Scène** utilisent une liste des scènes existantes. Types
+  et instances sont enregistrés dans le projet. Le panneau Bâtiments, les modules
+  et prefabs ont été retirés de l'interface. `prefab_id` et `Building` restent
+  uniquement pour lire les anciens projets.
 - En mode Lecture, un indicateur FPS lissé apparaît dans le coin supérieur droit
   du viewport.
 - **Caméras de scène** : une caméra est un objet déplaçable avec une position
@@ -220,7 +262,16 @@ si l'objet déplacé est solide. Il ne peut pas entrer dans une tuile dont le ty
 est solide, ni recouvrir un autre objet solide à la même élévation ; les deux
 objets doivent avoir les collisions activées. Les empreintes rectangulaires sont
 prises en compte. Un déplacement bloqué est ignoré silencieusement. Cette
-première version ne calcule pas de poussée et n'émet pas d'événement de contact.
+première version ne calcule pas de poussée.
+
+Les scripts d'objet peuvent aussi recevoir des événements de zone sans activer
+les collisions physiques. Un script qui définit `_on_area_entered(game, other)`,
+`_on_area_stayed(game, other)` ou `_on_area_exited(game, other)` fait de son
+objet une zone rectangulaire. Le moteur compare les empreintes des objets au
+même étage après les mises à jour Python de la frame. `other` est un instantané
+en lecture seule (`GameObject`). L'empreinte se règle dans l'inspecteur. Les
+formes libres, le filtrage par type/couche et les événements de collision
+physique restent à développer.
 
 Le contenu de la case « Ajuster » est sérialisé sur l'objet. Les anciens objets
 qui n'ont pas ce champ sont chargés avec la valeur par défaut `true`.
@@ -284,8 +335,8 @@ conserve son comportement habituel.
 L'API permet entre autres de créer, déplacer ou supprimer des objets, de changer
 des propriétés, de lire l'état clavier et d'écrire dans les logs. Les scripts
 restent du code de confiance : PyO3 ne constitue pas une sandbox. La lecture
-d'état global, les entrées souris, les événements de jeu, le débogage interactif
-et le pipeline de déploiement restent à développer.
+d'état global, les entrées souris, les autres événements de jeu, le débogage
+interactif et le pipeline de déploiement restent à développer.
 
 Le binaire `player` partage la boucle graphique et les systèmes de scène avec
 l'éditeur, mais charge directement un projet en Lecture et n'affiche pas les

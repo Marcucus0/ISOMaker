@@ -13,7 +13,7 @@ use scripting::{ScriptRuntime, GameCommand};
 use std::collections::{HashSet, VecDeque};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use world::{
-    object::{ObjectId, ObjectType},
+    object::{CustomObjectTypeDefinition, CustomPropertyKind, ObjectId, ObjectType, PropValue, SceneObject},
     project::Project,
     scene::Scene,
     coords::TilePos,
@@ -39,6 +39,10 @@ pub struct EditorState {
     pub input: InputState,
     /// Instantané de la scène au démarrage du play (pour restauration au Stop).
     scene_snapshot: Option<String>,
+    /// Pile utilisée par game.load_scene()/game.unload_scene().
+    scene_stack: Vec<usize>,
+    /// Paires zone/objet qui se chevauchaient lors de la dernière frame.
+    area_overlaps: HashSet<(ObjectId, ObjectId)>,
     /// Messages de log accumulés.
     pub log_messages: VecDeque<LogEntry>,
     /// Historique des états de scène pour annuler/rétablir les éditions.
@@ -73,6 +77,8 @@ impl EditorState {
             game_loop: GameLoop::new(),
             input: InputState::new(),
             scene_snapshot: None,
+            scene_stack: Vec::new(),
+            area_overlaps: HashSet::new(),
             log_messages: VecDeque::new(),
             undo_history: Vec::new(),
             redo_history: Vec::new(),
@@ -81,8 +87,11 @@ impl EditorState {
     }
 
     pub fn add_scene(&mut self) -> usize {
-        let index = self.project.world.scenes.len() + 1;
-        self.project.world.add_scene(format!("Scène {index}"))
+        let mut number = 1;
+        while self.project.world.scenes.iter().any(|scene| scene.meta.name == format!("Scène {number}")) {
+            number += 1;
+        }
+        self.project.world.add_scene(format!("Scène {number}"))
     }
 
     pub fn active_scene(&self) -> &Scene {
@@ -97,11 +106,35 @@ impl EditorState {
         if !self.project.world.select_scene(index) {
             return false;
         }
+        self.scene_stack.clear();
         self.selected = None;
         self.scene_snapshot = None;
         self.undo_history.clear();
         self.redo_history.clear();
         true
+    }
+
+    fn load_scene_by_name(&mut self, name: &str) -> Result<bool, String> {
+        let Some(index) = self.project.world.scenes.iter().position(|scene| scene.meta.name == name) else {
+            return Err(format!("Aucune scène ne porte le nom « {name} »."));
+        };
+        let current = self.project.world.active_scene_index;
+        if current == index { return Ok(false); }
+        self.scene_stack.push(current);
+        self.project.world.active_scene_index = index;
+        self.selected = None;
+        self.area_overlaps.clear();
+        Ok(true)
+    }
+
+    fn unload_active_scene(&mut self) -> Result<bool, String> {
+        let Some(previous) = self.scene_stack.pop() else {
+            return Err("Aucune scène précédente à décharger.".to_owned());
+        };
+        self.project.world.active_scene_index = previous;
+        self.selected = None;
+        self.area_overlaps.clear();
+        Ok(true)
     }
 
     /// Démarre la simulation.
@@ -112,8 +145,13 @@ impl EditorState {
         // Le toolbar applique déjà la transition de mode. L'absence de snapshot
         // distingue un nouveau Play d'une reprise après pause.
         if self.game_loop.mode == EngineMode::Playing && self.scene_snapshot.is_none() {
-            // Sauvegarde un instantané de la scène pour restauration au Stop.
-            self.scene_snapshot = self.active_scene().to_json().ok();
+            self.area_overlaps.clear();
+            // Conserve aussi la scène sélectionnée dans l'éditeur pour Stop.
+            self.scene_snapshot = self.project.to_json().ok();
+            if self.project.world.main_scene_index < self.project.world.scenes.len() {
+                self.project.world.active_scene_index = self.project.world.main_scene_index;
+            }
+            self.scene_stack.clear();
             match self.script_runtime.call_start() {
                 Ok(cmds) => self.apply_commands(cmds),
                 Err(e) => self.push_log(log::Level::Error, format!("on_start : {e}")),
@@ -145,6 +183,8 @@ impl EditorState {
         let has_active_session = self.game_loop.mode != EngineMode::Editor
             || self.scene_snapshot.is_some();
         self.game_loop.stop();
+        self.area_overlaps.clear();
+        self.scene_stack.clear();
         if !has_active_session {
             return;
         }
@@ -157,8 +197,8 @@ impl EditorState {
 
         // Restaure la scène.
         if let Some(snapshot) = self.scene_snapshot.take() {
-            match Scene::from_json(&snapshot) {
-                Ok(restored) => *self.active_scene_mut() = restored,
+            match Project::from_json(&snapshot) {
+                Ok(restored) => self.project = restored,
                 Err(e) => self.push_log(log::Level::Error, format!("Restauration : {e}")),
             }
         }
@@ -177,10 +217,6 @@ impl EditorState {
 
         let has_world_update = self.script_runtime.has_world_update();
         let has_object_update = self.script_runtime.has_object_update();
-        if !has_world_update && !has_object_update {
-            return;
-        }
-
         let mut objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
         let mut world_changed_scene = false;
         if has_world_update {
@@ -203,6 +239,37 @@ impl EditorState {
                 Err(e) => self.push_log(log::Level::Error, format!("Script objet _on_update : {e}")),
             }
         }
+        self.update_area_triggers(delta_time);
+    }
+
+    fn update_area_triggers(&mut self, delta_time: f32) {
+        let objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
+        let areas = objects.iter()
+            .filter(|object| self.script_runtime.object_has_area_hooks(&object.id.to_string()))
+            .collect::<Vec<_>>();
+        let mut overlaps = HashSet::new();
+        for area in &areas {
+            for other in &objects {
+                if area.id == other.id || !object_footprints_overlap(area, other) { continue; }
+                overlaps.insert((area.id, other.id));
+            }
+        }
+
+        let mut events = Vec::new();
+        events.extend(overlaps.difference(&self.area_overlaps).map(|pair| ("_on_area_entered", *pair)));
+        events.extend(overlaps.intersection(&self.area_overlaps).map(|pair| ("_on_area_stayed", *pair)));
+        events.extend(self.area_overlaps.difference(&overlaps).map(|pair| ("_on_area_exited", *pair)));
+        events.sort_by_key(|(hook, (area, other))| (*hook, area.to_string(), other.to_string()));
+        self.area_overlaps = overlaps;
+
+        for (hook, (area_id, other_id)) in events {
+            match self.script_runtime.call_object_area_event(
+                hook, &area_id.to_string(), &other_id.to_string(), delta_time, &objects, &self.input,
+            ) {
+                Ok(commands) => self.apply_commands(commands),
+                Err(error) => self.push_log(log::Level::Error, format!("{hook} : {error}")),
+            }
+        }
     }
 
     /// Applique les commandes Python sur la scène.
@@ -221,7 +288,13 @@ impl EditorState {
                 }
                 GameCommand::Destroy { object_id } => {
                     if let Ok(uuid) = uuid::Uuid::parse_str(&object_id) {
-                        self.active_scene_mut().remove_object(world::object::ObjectId(uuid));
+                        let id = world::object::ObjectId(uuid);
+                        let name = self.active_scene().get_object(id).map(|object| object.name.clone());
+                        if self.active_scene_mut().remove_object(id).is_some() {
+                            if let Some(name) = name {
+                                self.push_log(log::Level::Info, format!("Objet « {name} » supprimé."));
+                            }
+                        }
                     }
                 }
                 GameCommand::Move { object_id, x, y } => {
@@ -277,6 +350,28 @@ impl EditorState {
                         format!("SetGlobal: {} = {:?}", key, value),
                     );
                 }
+                GameCommand::LoadScene { name } => {
+                    match self.load_scene_by_name(&name) {
+                        Ok(true) => self.push_log(log::Level::Info, format!("Scène « {name} » chargée.")),
+                        Ok(false) => {}
+                        Err(error) => self.push_log(log::Level::Error, error),
+                    }
+                }
+                GameCommand::UnloadScene => {
+                    match self.unload_active_scene() {
+                        Ok(true) => {
+                            let name = self.active_scene().meta.name.clone();
+                            self.push_log(log::Level::Info, format!("Retour à la scène « {name} »."));
+                        }
+                        Ok(false) => {}
+                        Err(error) => self.push_log(log::Level::Warn, error),
+                    }
+                }
+                GameCommand::TransferObject { object_id, scene_name, x, y } => {
+                    if let Err(error) = self.transfer_object_to_scene(&object_id, &scene_name, x, y) {
+                        self.push_log(log::Level::Warn, error);
+                    }
+                }
                 GameCommand::Log { source, level, message } => {
                     let lvl = match level {
                         scripting::command::LogLevel::Debug   => log::Level::Debug,
@@ -289,6 +384,70 @@ impl EditorState {
                 GameCommand::Quit => { self.stop(); }
             }
         }
+    }
+
+    fn transfer_object_to_scene(
+        &mut self,
+        object_id: &str,
+        scene_name: &str,
+        x: i32,
+        y: i32,
+    ) -> Result<(), String> {
+        let uuid = uuid::Uuid::parse_str(object_id)
+            .map_err(|_| format!("Identifiant d'objet invalide : {object_id}"))?;
+        let id = world::object::ObjectId(uuid);
+        let current_index = self.project.world.active_scene_index;
+        let target_index = self.project.world.scenes.iter()
+            .position(|scene| scene.meta.name == scene_name)
+            .ok_or_else(|| format!("Aucune scène ne porte le nom « {scene_name} »."))?;
+        let mut destination = self.project.world.scenes[current_index].get_object(id)
+            .cloned()
+            .ok_or_else(|| format!("Objet introuvable dans la scène actuelle : {object_id}"))?;
+        destination.tile_pos.x = x;
+        destination.tile_pos.y = y;
+        let destination_z = destination.tile_pos.z;
+        let object_name = destination.name.clone();
+
+        if current_index == target_index {
+            let moved = move_object_with_collisions(
+                &mut self.project.world.scenes[current_index],
+                &self.project.tile_definitions,
+                id,
+                destination.tile_pos,
+            )?;
+            if !moved {
+                return Err(format!("Transfert de « {object_name} » bloqué par une collision."));
+            }
+            return Ok(());
+        }
+
+        if self.project.world.scenes[target_index].get_object(id).is_some() {
+            return Err(format!("L'objet {object_id} existe déjà dans la scène « {scene_name} »."));
+        }
+
+        self.project.world.scenes[target_index].add_object(destination);
+        let moved = match move_object_with_collisions(
+            &mut self.project.world.scenes[target_index],
+            &self.project.tile_definitions,
+            id,
+            TilePos::with_z(x, y, destination_z),
+        ) {
+            Ok(moved) => moved,
+            Err(error) => {
+                self.project.world.scenes[target_index].remove_object(id);
+                return Err(error);
+            }
+        };
+        if !moved {
+            self.project.world.scenes[target_index].remove_object(id);
+            return Err(format!("Transfert de « {object_name} » vers « {scene_name} » bloqué par une collision."));
+        }
+
+        self.project.world.scenes[current_index].remove_object(id);
+        self.push_log(log::Level::Info, format!(
+            "Objet « {object_name} » transféré vers « {scene_name} » ; la scène active n'a pas changé."
+        ));
+        Ok(())
     }
 
     fn push_log(&mut self, level: log::Level, msg: String) {
@@ -356,6 +515,17 @@ impl EditorState {
     }
 }
 
+fn object_footprints_overlap(a: &world::object::SceneObject, b: &world::object::SceneObject) -> bool {
+    if a.tile_pos.z != b.tile_pos.z { return false; }
+    let (ax1, ay1) = (i64::from(a.tile_pos.x), i64::from(a.tile_pos.y));
+    let (bx1, by1) = (i64::from(b.tile_pos.x), i64::from(b.tile_pos.y));
+    let ax2 = ax1 + i64::from(a.footprint.width.max(1));
+    let ay2 = ay1 + i64::from(a.footprint.height.max(1));
+    let bx2 = bx1 + i64::from(b.footprint.width.max(1));
+    let by2 = by1 + i64::from(b.footprint.height.max(1));
+    ax1 < bx2 && bx1 < ax2 && ay1 < by2 && by1 < ay2
+}
+
 fn move_object_with_collisions(
     scene: &mut Scene,
     tile_definitions: &[world::grid::TileDefinition],
@@ -421,6 +591,76 @@ fn json_to_prop(v: serde_json::Value) -> world::object::PropValue {
         serde_json::Value::String(s)   => PropValue::Str(s),
         serde_json::Value::Array(arr)  => PropValue::List(arr.into_iter().map(json_to_prop).collect()),
         serde_json::Value::Object(_)   => PropValue::Str("[object]".to_string()),
+    }
+}
+
+fn synchronize_custom_object_instances(
+    scenes: &mut [Scene],
+    definitions: &[CustomObjectTypeDefinition],
+    scene_names: &[String],
+) {
+    for scene in scenes {
+        for object in scene.objects.values_mut() {
+            let Some(type_id) = object.custom_type_id else { continue };
+            let Some(definition) = definitions.iter().find(|definition| definition.id == type_id) else { continue };
+            object.object_type = ObjectType::Custom(definition.name.clone());
+            let valid_keys: HashSet<&str> = definition.properties.iter()
+                .map(|property| property.key.as_str()).collect();
+            object.properties.retain(|key, _| key == "texture" || valid_keys.contains(key.as_str()));
+
+            for property in &definition.properties {
+                let mut default = property.default_value.clone();
+                if property.kind == CustomPropertyKind::Scene {
+                    if let PropValue::Str(value) = &default {
+                        if !scene_names.iter().any(|name| name == value) {
+                            default = PropValue::Str(scene_names.first().cloned().unwrap_or_default());
+                        }
+                    }
+                }
+                let valid = object.properties.get(&property.key).is_some_and(|value| match property.kind {
+                    CustomPropertyKind::Text | CustomPropertyKind::Scene => matches!(value, PropValue::Str(_)),
+                    CustomPropertyKind::Integer => matches!(value, PropValue::Int(_)),
+                    CustomPropertyKind::Float => matches!(value, PropValue::Float(_)),
+                    CustomPropertyKind::Boolean => matches!(value, PropValue::Bool(_)),
+                });
+                if !valid {
+                    let value = match (property.kind, object.properties.get(&property.key)) {
+                        (CustomPropertyKind::Float, Some(PropValue::Int(value))) => PropValue::Float(*value as f64),
+                        _ => default,
+                    };
+                    object.properties.insert(property.key.clone(), value);
+                }
+            }
+        }
+    }
+}
+
+fn remap_custom_scene_properties(project: &mut Project, old_name: &str, new_name: Option<&str>) {
+    let fallback_scene = project.world.scenes.first().map(|scene| scene.meta.name.clone()).unwrap_or_default();
+    let mut scene_keys = std::collections::HashMap::<uuid::Uuid, HashSet<String>>::new();
+    for definition in &mut project.object_types {
+        let keys: HashSet<String> = definition.properties.iter()
+            .filter(|property| property.kind == CustomPropertyKind::Scene)
+            .map(|property| property.key.clone()).collect();
+        if keys.is_empty() { continue; }
+        for property in &mut definition.properties {
+            if property.kind == CustomPropertyKind::Scene
+                && property.default_value.as_str() == Some(old_name) {
+                property.default_value = PropValue::Str(new_name.unwrap_or(&fallback_scene).to_owned());
+            }
+        }
+        scene_keys.insert(definition.id, keys);
+    }
+    for scene in &mut project.world.scenes {
+        for object in scene.objects.values_mut() {
+            let Some(type_id) = object.custom_type_id else { continue };
+            let Some(keys) = scene_keys.get(&type_id) else { continue };
+            for key in keys {
+                if object.properties.get(key).and_then(PropValue::as_str) == Some(old_name) {
+                    object.properties.insert(key.clone(), PropValue::Str(new_name.unwrap_or(&fallback_scene).to_owned()));
+                }
+            }
+        }
     }
 }
 
@@ -564,6 +804,11 @@ pub struct EditorApp {
     runtime_camera_position: Option<egui::Vec2>,
     runtime_camera_zoom: Option<f32>,
     pending_deletion: Option<(Vec<ObjectId>, Vec<TilePos>)>,
+    pending_tile_definition_deletion: Option<u16>,
+    pending_scene_rename: Option<usize>,
+    scene_rename_buffer: String,
+    scene_rename_error: Option<String>,
+    pending_scene_deletion: Option<usize>,
     selected_log_ids: HashSet<u64>,
     log_selection_anchor: Option<u64>,
     log_selection_focused: bool,
@@ -619,6 +864,11 @@ impl EditorApp {
             runtime_camera_position: None,
             runtime_camera_zoom: None,
             pending_deletion: None,
+            pending_tile_definition_deletion: None,
+            pending_scene_rename: None,
+            scene_rename_buffer: String::new(),
+            scene_rename_error: None,
+            pending_scene_deletion: None,
             selected_log_ids: HashSet::new(),
             log_selection_anchor: None,
             log_selection_focused: false,
@@ -640,8 +890,8 @@ impl EditorApp {
         app.load_scene(&path)?;
         app.load_world_script()?;
         app.load_object_scripts()?;
-        app.runtime_camera = app.state.active_scene().main_camera;
         app.state.play();
+        app.runtime_camera = app.state.active_scene().main_camera;
         Ok(app)
     }
 
@@ -666,8 +916,17 @@ impl EditorApp {
                 self.fps_estimate * 0.9 + instantaneous * 0.1
             };
         }
+        let scene_before_update = self.state.project.world.active_scene_index;
         // Met à jour la simulation si en cours.
         self.state.update(delta_time);
+        if scene_before_update != self.state.project.world.active_scene_index {
+            self.runtime_camera = self.state.active_scene().main_camera;
+            self.runtime_camera_position = None;
+            self.runtime_camera_zoom = None;
+            self.scene_view.selected_object = None;
+            self.scene_view.selected_objects.clear();
+            self.scene_view.selected_tiles.clear();
+        }
 
         if self.player_mode {
             self.update_player_view(ctx, delta_time);
@@ -754,6 +1013,7 @@ impl EditorApp {
                 delta_time,
                 None,
                 false,
+                true,
                 false,
                 false,
                 &mut self.runtime_camera,
@@ -763,7 +1023,7 @@ impl EditorApp {
 
     /// Capture Ctrl+C/Ctrl+V avant qu'egui-winit les traite comme des raccourcis
     /// du presse-papiers texte.
-    pub fn queue_tile_clipboard_shortcut(&mut self, copy: bool) -> bool {
+    pub fn queue_clipboard_shortcut(&mut self, copy: bool) -> bool {
         let has_selected_logs = self.show_log && self.log_selection_focused && self.state.log_messages.iter()
             .any(|entry| self.selected_log_ids.contains(&entry.id));
         if copy && has_selected_logs {
@@ -775,7 +1035,7 @@ impl EditorApp {
         {
             return false;
         }
-        self.scene_view.request_tile_clipboard_shortcut(copy);
+        self.scene_view.request_clipboard_shortcut(copy);
         true
     }
 
@@ -875,6 +1135,16 @@ impl EditorApp {
                     self.scene_view.selected_tiles.clear();
                     self.scene_view.selected_objects.clear();
                     history_action = true;
+                } else if let Some(index) = self.toolbar.scene_rename_requested {
+                    if let Some(scene) = self.state.project.world.scenes.get(index) {
+                        self.scene_rename_buffer = scene.meta.name.clone();
+                        self.pending_scene_rename = Some(index);
+                        self.scene_rename_error = None;
+                    }
+                } else if let Some(index) = self.toolbar.scene_delete_requested {
+                    if self.state.project.world.scenes.len() > 1 {
+                        self.pending_scene_deletion = Some(index);
+                    }
                 } else if let Some(index) = self.toolbar.scene_switch_requested {
                     if self.state.select_scene(index) {
                         self.scene_view.selected_object = None;
@@ -899,6 +1169,7 @@ impl EditorApp {
                                     self.runtime_camera_position = None;
                                     self.runtime_camera_zoom = None;
                                     self.state.play();
+                                    self.runtime_camera = self.state.active_scene().main_camera;
                                 }
                                 Err(error) => {
                                     self.state.game_loop.stop();
@@ -937,6 +1208,7 @@ impl EditorApp {
             let mut settings_changed = false;
             egui::Window::new("Paramètres de l'éditeur")
                 .open(&mut self.show_editor_settings)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new("Affichage du viewport").strong());
@@ -965,13 +1237,34 @@ impl EditorApp {
 
         if self.show_world_settings {
             let current_script = self.state.project.world.script.clone();
+            let main_scene_names = self.state.project.world.scenes.iter()
+                .map(|scene| scene.meta.name.clone()).collect::<Vec<_>>();
+            let mut main_scene_index = self.state.project.world.main_scene_index;
+            let mut main_scene_changed = false;
             let mut choose_script = false;
             let mut create_script = false;
-            egui::Window::new("Monde — script Python")
+            egui::Window::new("Paramètres du monde")
                 .open(&mut self.show_world_settings)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.label(format!("Monde : {}", self.state.project.world.name));
+                    ui.horizontal(|ui| {
+                        ui.label("Scène principale (Main) :");
+                        let selected_name = main_scene_names.get(main_scene_index)
+                            .map(String::as_str).unwrap_or("Aucune");
+                        egui::ComboBox::from_id_salt("world_main_scene")
+                            .selected_text(selected_name)
+                            .show_ui(ui, |ui| {
+                                for (index, name) in main_scene_names.iter().enumerate() {
+                                    if ui.selectable_value(&mut main_scene_index, index, name).changed() {
+                                        main_scene_changed = true;
+                                    }
+                                }
+                            });
+                    });
+                    ui.separator();
+                    ui.label(egui::RichText::new("Script Python du monde").strong());
                     ui.horizontal(|ui| {
                         ui.label("Script lié :");
                         ui.label(current_script.as_deref().unwrap_or("Aucun"));
@@ -991,6 +1284,10 @@ impl EditorApp {
                         }
                     }
                 });
+
+            if main_scene_changed {
+                self.state.project.world.main_scene_index = main_scene_index;
+            }
 
             if choose_script {
                 match choose_script_file() {
@@ -1190,20 +1487,27 @@ impl EditorApp {
             .and_then(|path| path.canonicalize().ok());
         let active_project_file = self.project_path.as_deref()
             .and_then(|path| path.canonicalize().ok());
+        let scene_names: Vec<String> = self.state.project.world.scenes.iter()
+            .map(|scene| scene.meta.name.clone()).collect();
         let mut tile_texture_picker = None;
+        let mut object_type_texture_picker = None;
+        let mut object_type_script_picker = None;
         egui::SidePanel::left("left_panel")
             .resizable(true)
             .default_width(220.0)
             .show(ctx, |ui| {
                 ui.add_enabled_ui(editing_enabled, |ui| {
                 let selection_before_panel = self.state.selected;
+                let project = &mut self.state.project;
                 let action = self.left_panel.show(
                     ui,
-                    self.state.project.world.active_scene_mut(),
+                    project.world.active_scene_mut(),
                     &mut self.state.selected,
                     project_root.as_deref(),
                     active_project_file.as_deref(),
-                    &mut self.state.project.tile_definitions,
+                    &mut project.tile_definitions,
+                    &mut project.object_types,
+                    &scene_names,
                 );
                 if self.state.selected != selection_before_panel {
                     self.scene_view.selected_object = self.state.selected;
@@ -1231,10 +1535,19 @@ impl EditorApp {
                             self.state.push_log(log::Level::Error, format!("Renommage : {error}"));
                         }
                     }
+                    PanelAction::DeletePath(path) => {
+                        match self.delete_project_path(&path) {
+                            Ok(()) => self.state.push_log(log::Level::Info, format!("Fichier ou dossier supprimé : {}", path.display())),
+                            Err(error) => self.state.push_log(log::Level::Error, format!("Suppression : {error}")),
+                        }
+                    }
                     PanelAction::DeleteObject(id) => {
                         self.pending_deletion = Some((vec![id], Vec::new()));
                     }
                     PanelAction::ChooseTileTexture(id) => tile_texture_picker = Some(id),
+                    PanelAction::DeleteTileDefinition(id) if id > 6 => {
+                        self.pending_tile_definition_deletion = Some(id);
+                    }
                     PanelAction::AddObject => {
                         let id = self.state.active_scene_mut().spawn(
                             "Nouvel objet",
@@ -1242,6 +1555,71 @@ impl EditorApp {
                             TilePos::new(0, 0),
                         );
                         self.state.selected = Some(id);
+                    }
+                    PanelAction::ObjectTypesChanged => {
+                        synchronize_custom_object_instances(
+                            &mut self.state.project.world.scenes,
+                            &self.state.project.object_types,
+                            &scene_names,
+                        );
+                    }
+                    PanelAction::RenameCustomProperty(type_id, old_key, new_key) => {
+                        for scene in &mut self.state.project.world.scenes {
+                            for object in scene.objects.values_mut() {
+                                if object.custom_type_id == Some(type_id) {
+                                    if let Some(value) = object.properties.remove(&old_key) {
+                                        object.properties.insert(new_key.clone(), value);
+                                    }
+                                }
+                            }
+                        }
+                        synchronize_custom_object_instances(
+                            &mut self.state.project.world.scenes,
+                            &self.state.project.object_types,
+                            &scene_names,
+                        );
+                    }
+                    PanelAction::AddCustomObject(type_id) => {
+                        if let Some(definition) = self.state.project.object_types.iter()
+                            .find(|definition| definition.id == type_id).cloned() {
+                            let position = self.scene_view.hovered_tile.unwrap_or_else(|| TilePos::new(0, 0));
+                            let mut object = SceneObject::new(
+                                definition.name.clone(),
+                                ObjectType::Custom(definition.name.clone()),
+                                position,
+                            );
+                            object.custom_type_id = Some(type_id);
+                            object.has_collisions = definition.defaults.has_collisions;
+                            object.hidden = definition.defaults.hidden;
+                            object.fit_texture_to_diamond = definition.defaults.fit_texture_to_diamond;
+                            object.footprint = definition.defaults.footprint;
+                            object.rotation = definition.defaults.rotation;
+                            object.layer = definition.defaults.layer;
+                            object.script = definition.defaults.script.clone();
+                            object.asset_path = definition.defaults.texture.clone();
+                            if let Some(texture) = &definition.defaults.texture {
+                                object.properties.insert("texture".to_owned(), PropValue::Str(texture.clone()));
+                            }
+                            for property in definition.properties {
+                                object.properties.insert(property.key, property.default_value);
+                            }
+                            let id = self.state.active_scene_mut().add_object(object);
+                            self.state.selected = Some(id);
+                            self.scene_view.selected_object = Some(id);
+                            self.scene_view.selected_objects.clear();
+                            self.scene_view.selected_objects.insert(id);
+                        }
+                    }
+                    PanelAction::DeleteCustomObjectType(type_id) => {
+                        self.state.project.object_types.retain(|definition| definition.id != type_id);
+                        for scene in &mut self.state.project.world.scenes {
+                            for object in scene.objects.values_mut() {
+                                if object.custom_type_id == Some(type_id) {
+                                    object.custom_type_id = None;
+                                    object.object_type = ObjectType::Custom("custom".to_owned());
+                                }
+                            }
+                        }
                     }
                     PanelAction::AddCamera => {
                         let camera = world::SceneObject::new(
@@ -1252,27 +1630,6 @@ impl EditorApp {
                         let id = self.state.active_scene_mut().add_object(camera);
                         self.state.selected = Some(id);
                         self.scene_view.selected_object = Some(id);
-                    }
-                    PanelAction::AddModule(kind) => {
-                        let mut obj = world::SceneObject::new(
-                            kind.label(),
-                            world::ObjectType::Building,
-                            TilePos::new(0, 0),
-                        );
-                        if kind == world::BuildingModuleKind::Roof {
-                            obj.layer = world::Layer::Foreground;
-                            obj.tile_pos.z = 1;
-                        } else {
-                            obj.layer = world::Layer::Buildings;
-                        }
-                        let id = self.state.active_scene_mut().add_object(obj);
-                        self.state.selected = Some(id);
-                    }
-                    PanelAction::InstantiatePrefab(prefab) => {
-                        let ids = self.state.active_scene_mut().instantiate_prefab(&prefab, TilePos::new(0, 0));
-                        if let Some(&first) = ids.first() {
-                            self.state.selected = Some(first);
-                        }
                     }
                     _ => {}
                 }
@@ -1301,6 +1658,7 @@ impl EditorApp {
         let mut texture_picker_object = None;
         let mut script_picker_object = None;
         let mut script_create_object = None;
+        let mut type_definition_edit = None;
         egui::SidePanel::right("inspector_panel")
             .resizable(true)
             .default_width(240.0)
@@ -1315,23 +1673,94 @@ impl EditorApp {
                     let mut request_texture_picker = false;
                     let mut request_script_picker = false;
                     let mut request_script_create = false;
-                    Inspector::show(
-                        ui,
-                        self.state.project.world.active_scene_mut(),
-                        selected,
-                        self.scene_view.selected_objects.len(),
-                        &mut request_texture_picker,
-                        &mut request_script_picker,
-                        &mut request_script_create,
-                    );
-                    if request_texture_picker {
-                        texture_picker_object = selected;
+                    if let Some(type_id) = self.left_panel.selected_object_type_id() {
+                        let edit = Inspector::show_type_definition(
+                            ui,
+                            type_id,
+                            &mut self.state.project.object_types,
+                            &scene_names,
+                            &mut request_texture_picker,
+                            &mut request_script_picker,
+                        );
+                        if request_texture_picker { object_type_texture_picker = Some(type_id); }
+                        if request_script_picker { object_type_script_picker = Some(type_id); }
+                        type_definition_edit = Some(edit);
+                    } else {
+                        Inspector::show(
+                            ui,
+                            self.state.project.world.active_scene_mut(),
+                            selected,
+                            self.scene_view.selected_objects.len(),
+                            &self.state.project.object_types,
+                            &scene_names,
+                            &mut request_texture_picker,
+                            &mut request_script_picker,
+                            &mut request_script_create,
+                        );
+                        if request_texture_picker { texture_picker_object = selected; }
+                        if request_script_picker { script_picker_object = selected; }
+                        if request_script_create { script_create_object = selected; }
                     }
-                    if request_script_picker { script_picker_object = selected; }
-                    if request_script_create { script_create_object = selected; }
                   });
                 });
             });
+
+        if let Some(edit) = type_definition_edit {
+            if let Some((type_id, old_key, new_key)) = edit.renamed_property {
+                for scene in &mut self.state.project.world.scenes {
+                    for object in scene.objects.values_mut() {
+                        if object.custom_type_id == Some(type_id) {
+                            if let Some(value) = object.properties.remove(&old_key) {
+                                object.properties.insert(new_key.clone(), value);
+                            }
+                        }
+                    }
+                }
+            }
+            if edit.changed {
+                synchronize_custom_object_instances(
+                    &mut self.state.project.world.scenes,
+                    &self.state.project.object_types,
+                    &scene_names,
+                );
+            }
+        }
+
+        if let Some(type_id) = object_type_texture_picker {
+            match choose_texture_file() {
+                Ok(Some(path)) => match self.import_texture(&path) {
+                    Ok(stored_path) => {
+                        if let Some(definition) = self.state.project.object_types.iter_mut()
+                            .find(|definition| definition.id == type_id) {
+                            definition.defaults.texture = Some(stored_path);
+                        }
+                    }
+                    Err(error) => self.state.push_log(log::Level::Error,
+                        format!("Import de texture du type : {error}")),
+                },
+                Ok(None) => {}
+                Err(error) => self.state.push_log(log::Level::Error,
+                    format!("Sélecteur de texture du type : {error}")),
+            }
+        }
+
+        if let Some(type_id) = object_type_script_picker {
+            match choose_script_file() {
+                Ok(Some(path)) => match self.import_object_script(&path) {
+                    Ok(stored_path) => {
+                        if let Some(definition) = self.state.project.object_types.iter_mut()
+                            .find(|definition| definition.id == type_id) {
+                            definition.defaults.script = Some(stored_path);
+                        }
+                    }
+                    Err(error) => self.state.push_log(log::Level::Error,
+                        format!("Import du script par défaut du type : {error}")),
+                },
+                Ok(None) => {}
+                Err(error) => self.state.push_log(log::Level::Error,
+                    format!("Sélecteur de script du type : {error}")),
+            }
+        }
 
         if let Some(object_id) = texture_picker_object {
             match choose_texture_file() {
@@ -1445,6 +1874,7 @@ impl EditorApp {
                 delta_time,
                 fps_overlay,
                 editing_enabled,
+                !editing_enabled,
                 grid_visible,
                 true,
                 &mut self.runtime_camera,
@@ -1492,14 +1922,173 @@ impl EditorApp {
         } else if confirm_deletion {
             if let Some((object_ids, tiles)) = self.pending_deletion.take() {
                 for id in object_ids {
-                    self.state.active_scene_mut().remove_object(id);
+                    let name = self.state.active_scene().get_object(id).map(|object| object.name.clone());
+                    let removed = self.state.active_scene_mut().remove_object(id).is_some();
                     self.scene_view.selected_objects.remove(&id);
                     if self.state.selected == Some(id) { self.state.selected = None; }
                     if self.scene_view.selected_object == Some(id) { self.scene_view.selected_object = None; }
+                    if removed {
+                        if let Some(name) = name {
+                            self.state.push_log(log::Level::Info, format!("Objet « {name} » supprimé."));
+                        }
+                    }
                 }
                 for tile in &tiles {
                     self.state.active_scene_mut().clear_tile(*tile);
                     self.scene_view.selected_tiles.remove(tile);
+                }
+            }
+        }
+        let mut confirm_scene_rename = false;
+        let mut cancel_scene_rename = false;
+        if self.pending_scene_rename.is_some() {
+            egui::Window::new("Renommer la scène")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                        cancel_scene_rename = true;
+                    }
+                    if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                        confirm_scene_rename = true;
+                    }
+                    ui.text_edit_singleline(&mut self.scene_rename_buffer);
+                    if let Some(error) = &self.scene_rename_error {
+                        ui.colored_label(egui::Color32::RED, error);
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Annuler").clicked() { cancel_scene_rename = true; }
+                        if ui.button("Renommer").clicked() { confirm_scene_rename = true; }
+                    });
+                });
+        }
+        if cancel_scene_rename {
+            self.pending_scene_rename = None;
+            self.scene_rename_error = None;
+        } else if confirm_scene_rename {
+            if let Some(index) = self.pending_scene_rename {
+                let name = self.scene_rename_buffer.trim().to_owned();
+                let duplicate = self.state.project.world.scenes.iter().enumerate()
+                    .any(|(other_index, scene)| other_index != index && scene.meta.name.eq_ignore_ascii_case(&name));
+                if name.is_empty() {
+                    self.scene_rename_error = Some("Le nom ne peut pas être vide.".to_owned());
+                } else if duplicate {
+                    self.scene_rename_error = Some("Une scène porte déjà ce nom.".to_owned());
+                } else if let Some(scene) = self.state.project.world.scenes.get_mut(index) {
+                    let old_name = scene.meta.name.clone();
+                    scene.meta.name = name.clone();
+                    remap_custom_scene_properties(&mut self.state.project, &old_name, Some(&name));
+                    self.pending_scene_rename = None;
+                    self.scene_rename_error = None;
+                    history_action = true;
+                } else {
+                    self.pending_scene_rename = None;
+                }
+            }
+        }
+
+        let mut confirm_scene_deletion = false;
+        let mut cancel_scene_deletion = false;
+        if let Some(index) = self.pending_scene_deletion {
+            let name = self.state.project.world.scenes.get(index)
+                .map(|scene| scene.meta.name.clone()).unwrap_or_default();
+            egui::Window::new("Supprimer la scène ?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                        cancel_scene_deletion = true;
+                    }
+                    if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                        confirm_scene_deletion = true;
+                    }
+                    ui.label(format!("Supprimer la scène « {name} » ?"));
+                    ui.horizontal(|ui| {
+                        if ui.button("Annuler").clicked() { cancel_scene_deletion = true; }
+                        if ui.button("Supprimer").clicked() { confirm_scene_deletion = true; }
+                    });
+                });
+        }
+        if cancel_scene_deletion {
+            self.pending_scene_deletion = None;
+        } else if confirm_scene_deletion {
+            if let Some(index) = self.pending_scene_deletion.take() {
+                if self.state.project.world.scenes.len() > 1 {
+                    let was_active = self.state.project.world.active_scene_index == index;
+                    if let Some(removed) = self.state.project.world.remove_scene(index) {
+                        remap_custom_scene_properties(&mut self.state.project, &removed.meta.name, None);
+                        let names: Vec<String> = self.state.project.world.scenes.iter()
+                            .map(|scene| scene.meta.name.clone()).collect();
+                        synchronize_custom_object_instances(
+                            &mut self.state.project.world.scenes,
+                            &self.state.project.object_types,
+                            &names,
+                        );
+                        self.state.scene_stack.clear();
+                        if was_active {
+                            self.state.selected = None;
+                            self.scene_view.selected_object = None;
+                            self.scene_view.selected_objects.clear();
+                            self.scene_view.selected_tiles.clear();
+                        }
+                        self.state.push_log(log::Level::Info,
+                            format!("Scène « {} » supprimée.", removed.meta.name));
+                        history_action = true;
+                    }
+                }
+            }
+        }
+
+        let mut confirm_tile_definition_deletion = false;
+        let mut cancel_tile_definition_deletion = false;
+        if let Some(tile_id) = self.pending_tile_definition_deletion {
+            let tile_name = self.state.project.tile_definitions.iter()
+                .find(|tile| tile.id == tile_id)
+                .map(|tile| tile.name.clone())
+                .unwrap_or_else(|| format!("tuile {tile_id}"));
+            egui::Window::new("Supprimer une tuile personnalisée ?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                        cancel_tile_definition_deletion = true;
+                    }
+                    if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                        confirm_tile_definition_deletion = true;
+                    }
+                    ui.label(format!("Supprimer « {tile_name} » et effacer ses cases peintes dans toutes les scènes ?"));
+                    ui.horizontal(|ui| {
+                        if ui.button("Annuler").clicked() { cancel_tile_definition_deletion = true; }
+                        if ui.button("Supprimer").clicked() { confirm_tile_definition_deletion = true; }
+                    });
+                });
+        }
+        if cancel_tile_definition_deletion {
+            self.pending_tile_definition_deletion = None;
+        } else if confirm_tile_definition_deletion {
+            if let Some(tile_id) = self.pending_tile_definition_deletion.take() {
+                if tile_id > 6 {
+                    let tile_name = self.state.project.tile_definitions.iter()
+                        .find(|tile| tile.id == tile_id)
+                        .map(|tile| tile.name.clone())
+                        .unwrap_or_else(|| format!("tuile {tile_id}"));
+                    self.state.project.tile_definitions.retain(|tile| tile.id != tile_id);
+                    let active_scene = self.state.project.world.active_scene_index;
+                    let mut removed_active_tiles = Vec::new();
+                    for (index, scene) in self.state.project.world.scenes.iter_mut().enumerate() {
+                        let removed = remove_tile_definition_from_scene(scene, tile_id);
+                        if index == active_scene { removed_active_tiles = removed; }
+                    }
+                    for tile in removed_active_tiles {
+                        self.scene_view.selected_tiles.remove(&tile);
+                    }
+                    self.left_panel.selected_tile_type = self.state.project.tile_definitions
+                        .iter().map(|tile| tile.id).min().unwrap_or(1);
+                    self.state.push_log(log::Level::Info,
+                        format!("Tuile personnalisée « {tile_name} » supprimée du projet."));
                 }
             }
         }
@@ -1872,6 +2461,57 @@ impl EditorApp {
         Ok(())
     }
 
+    fn delete_project_path(&mut self, requested: &std::path::Path) -> anyhow::Result<()> {
+        let project_file = self.project_path.as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Aucun projet n'est ouvert"))?;
+        let browser_root = project_browser_directory(project_file)?.canonicalize()?;
+        let target = resolve_project_browser_path(Some(project_file), requested)?;
+        anyhow::ensure!(target != browser_root, "Impossible de supprimer la racine du projet");
+        anyhow::ensure!(target.exists(), "Le fichier ou dossier n'existe plus");
+
+        let deleted_path = target.canonicalize()?;
+        let project_root = project_file.parent()
+            .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?.canonicalize()?;
+        let referenced = |stored: &str| {
+            let path = std::path::Path::new(stored);
+            let resolved = if path.is_absolute() { path.to_path_buf() } else { project_root.join(path) };
+            resolved.canonicalize().is_ok_and(|resolved| resolved.starts_with(&deleted_path))
+        };
+
+        for scene in &mut self.state.project.world.scenes {
+            for object in scene.objects.values_mut() {
+                if object.asset_path.as_deref().is_some_and(referenced) {
+                    object.asset_path = None;
+                }
+                if object.properties.get("texture").and_then(world::object::PropValue::as_str).is_some_and(referenced) {
+                    object.properties.remove("texture");
+                }
+                if object.script.as_deref().is_some_and(referenced) {
+                    object.script = None;
+                }
+            }
+        }
+        if self.state.project.world.script.as_deref().is_some_and(referenced) {
+            self.state.project.world.script = None;
+        }
+        for tile in &mut self.state.project.tile_definitions {
+            if tile.texture.as_deref().is_some_and(referenced) {
+                tile.texture = None;
+            }
+        }
+
+        if target.is_dir() {
+            std::fs::remove_dir_all(&target)?;
+        } else {
+            std::fs::remove_file(&target)?;
+        }
+        let json = self.state.project.to_json()?;
+        std::fs::write(project_file, json)?;
+        write_tile_definition_files(project_file, &self.state.project.tile_definitions)?;
+        self.left_panel.refresh_file_browser();
+        Ok(())
+    }
+
     fn import_texture(&self, selected: &std::path::Path) -> anyhow::Result<String> {
         let extension = selected.extension().and_then(|value| value.to_str())
             .unwrap_or_default().to_ascii_lowercase();
@@ -1983,11 +2623,19 @@ impl EditorApp {
         if let Err(error) = load_tile_definition_files(path, &mut project) {
             anyhow::bail!("Impossible de charger les définitions de tuiles du projet : {error}");
         }
+        let scene_names: Vec<String> = project.world.scenes.iter()
+            .map(|scene| scene.meta.name.clone()).collect();
+        synchronize_custom_object_instances(
+            &mut project.world.scenes,
+            &project.object_types,
+            &scene_names,
+        );
         self.state.project = project;
         self.state.selected = None;
         self.scene_view.selected_object = None;
         self.scene_view.selected_tiles.clear();
         self.scene_view.selected_objects.clear();
+        self.scene_view.clear_clipboard();
         self.state.undo_history.clear();
         self.state.redo_history.clear();
         self.project_path = Some(path.to_owned());
@@ -2043,7 +2691,8 @@ impl EditorApp {
             .and_then(|path| path.parent())
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        let scripts: Vec<(String, String)> = self.state.active_scene().objects.values()
+        let scripts: Vec<(String, String)> = self.state.project.world.scenes.iter()
+            .flat_map(|scene| scene.objects.values())
             .filter_map(|object| object.script.as_ref().filter(|path| !path.trim().is_empty())
                 .map(|path| (object.id.to_string(), path.clone())))
             .collect();
@@ -2078,7 +2727,7 @@ fn with_project_extension(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 const WORLD_SCRIPT_TEMPLATE: &str = "from __future__ import annotations\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from engine_api import GameContext\n\n\ndef _on_game_launch(game: GameContext) -> None:\n    \"\"\"Called once when the game starts.\"\"\"\n    pass\n\n\ndef _on_update(game: GameContext, delta_time: float) -> None:\n    \"\"\"Called on each game update.\"\"\"\n    pass\n";
-const OBJECT_SCRIPT_TEMPLATE: &str = "from __future__ import annotations\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from engine_api import GameContext\n\n\ndef _on_game_launch(game: GameContext) -> None:\n    \"\"\"Called once when the game starts.\"\"\"\n    # Object id: game.object_id; tile position: game.x, game.y, game.z\n    pass\n\n\ndef _on_update(game: GameContext, delta_time: float) -> None:\n    \"\"\"Called on each game update.\"\"\"\n    # Use game.move_self(x, y), game.destroy_self(), or game.set_self_property(...).\n    pass\n";
+const OBJECT_SCRIPT_TEMPLATE: &str = "from __future__ import annotations\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from engine_api import GameContext, GameObject\n\n\ndef _on_game_launch(game: GameContext) -> None:\n    \"\"\"Called once when the game starts.\"\"\"\n    # Object id: game.object_id; tile position: game.x, game.y, game.z\n    pass\n\n\ndef _on_update(game: GameContext, delta_time: float) -> None:\n    \"\"\"Called on each game update.\"\"\"\n    # Use game.move_self(x, y), game.destroy_self(), or game.set_self_property(...).\n    pass\n";
 
 fn validate_python_script_path(path: &std::path::Path) -> anyhow::Result<()> {
     if !path.extension().and_then(|value| value.to_str())
@@ -2276,11 +2925,49 @@ fn write_tile_definition_files(
 ) -> anyhow::Result<()> {
     let directory = project_tile_directory(project_file)?;
     std::fs::create_dir_all(&directory)?;
+    let active_ids: HashSet<u16> = definitions.iter().map(|definition| definition.id).collect();
+    for entry in std::fs::read_dir(&directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() || !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("json")) {
+            continue;
+        }
+        let Some(file_stem) = path.file_stem().and_then(|stem| stem.to_str()) else { continue };
+        let Some(id) = file_stem.strip_prefix("tile-").and_then(|id| id.parse::<u16>().ok()) else { continue };
+        if !active_ids.contains(&id) {
+            std::fs::remove_file(path)?;
+        }
+    }
     for definition in definitions {
         let path = directory.join(format!("tile-{:05}.json", definition.id));
         std::fs::write(path, serde_json::to_vec_pretty(definition)?)?;
     }
     Ok(())
+}
+
+fn remove_tile_definition_from_scene(scene: &mut Scene, tile_id: u16) -> Vec<TilePos> {
+    let chunk_size = world::grid::CHUNK_SIZE;
+    let positions = scene.grid.chunks.iter()
+        .flat_map(|(&(chunk_x, chunk_y), chunk)| {
+            chunk.tiles.iter().enumerate().filter_map(move |(index, data)| {
+                (data.tile_type == tile_id || data.decoration == tile_id).then(|| {
+                    TilePos::new(
+                        chunk_x * chunk_size + index as i32 % chunk_size,
+                        chunk_y * chunk_size + index as i32 / chunk_size,
+                    )
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for &position in &positions {
+        let mut data = scene.get_tile(position);
+        if data.tile_type == tile_id { data.tile_type = 0; }
+        if data.decoration == tile_id { data.decoration = 0; }
+        if data.is_empty() { scene.clear_tile(position); }
+        else { scene.set_tile(position, data); }
+    }
+    positions
 }
 
 fn load_tile_definition_files(

@@ -14,7 +14,6 @@ pub enum EditorTool {
     TilePaint,
     TileErase,
     TileFill,
-    Build,
 }
 
 impl EditorTool {
@@ -26,7 +25,6 @@ impl EditorTool {
             EditorTool::TilePaint => "Peindre",
             EditorTool::TileErase => "Gomme",
             EditorTool::TileFill  => "Remplir",
-            EditorTool::Build     => "Construire",
         }
     }
 }
@@ -163,15 +161,6 @@ fn draw_tool_icon(painter: &egui::Painter, rect: Rect, tool: EditorTool, color: 
             painter.circle_filled(point(0.77, 0.33), 1.5, color);
             painter.circle_filled(point(0.86, 0.48), 1.2, color);
         }
-        EditorTool::Build => {
-            line(point(0.35, 0.83), point(0.70, 0.48));
-            line(point(0.28, 0.76), point(0.42, 0.90));
-            line(point(0.18, 0.28), point(0.39, 0.10));
-            line(point(0.39, 0.10), point(0.63, 0.35));
-            line(point(0.63, 0.35), point(0.48, 0.50));
-            line(point(0.48, 0.50), point(0.18, 0.28));
-            line(point(0.61, 0.30), point(0.78, 0.14));
-        }
     }
 }
 
@@ -187,6 +176,8 @@ pub struct Toolbar {
     pub export_requested: bool,
     pub scene_switch_requested: Option<usize>,
     pub new_scene_requested: bool,
+    pub scene_rename_requested: Option<usize>,
+    pub scene_delete_requested: Option<usize>,
     pub world_settings_requested: bool,
     pub editor_settings_requested: bool,
     pub recent_project_requested: Option<PathBuf>,
@@ -205,6 +196,8 @@ impl Default for Toolbar {
             export_requested: false,
             scene_switch_requested: None,
             new_scene_requested: false,
+            scene_rename_requested: None,
+            scene_delete_requested: None,
             world_settings_requested: false,
             editor_settings_requested: false,
             recent_project_requested: None,
@@ -234,6 +227,8 @@ impl Toolbar {
         self.export_requested = false;
         self.scene_switch_requested = None;
         self.new_scene_requested = false;
+        self.scene_rename_requested = None;
+        self.scene_delete_requested = None;
         self.world_settings_requested = false;
         self.editor_settings_requested = false;
         self.recent_project_requested = None;
@@ -289,7 +284,7 @@ impl Toolbar {
             });
 
             ui.add_enabled_ui(editor_enabled, |ui| ui.menu_button("Monde", |ui| {
-                if ui.button("Script du monde…").clicked() {
+                if ui.button("Paramètres du monde…").clicked() {
                     self.world_settings_requested = true;
                     ui.close_menu();
                 }
@@ -306,7 +301,6 @@ impl Toolbar {
                 EditorTool::TilePaint,
                 EditorTool::TileErase,
                 EditorTool::TileFill,
-                EditorTool::Build,
             ] {
                 let selected = self.active_tool == tool;
                 if ui.add(ToolButton { tool, selected }).clicked() {
@@ -315,12 +309,37 @@ impl Toolbar {
             }
             });
 
-            ui.add_enabled_ui(editor_enabled, |ui| ui.menu_button("Scènes", |ui| {
+            let active_scene_name = scene_names.get(active_scene).map(String::as_str).unwrap_or("Aucune");
+            let scene_menu_label = format!("Scène : {active_scene_name}");
+            let longest_scene_label = scene_names.iter()
+                .map(|name| format!("Scène : {name}"))
+                .max_by_key(|label| label.chars().count())
+                .unwrap_or_else(|| "Scène : Aucune".to_owned());
+            let button_font = egui::TextStyle::Button.resolve(ui.style());
+            let label_width = ui.fonts(|fonts| {
+                fonts.layout_no_wrap(longest_scene_label, button_font, Color32::WHITE).size().x
+            });
+            let scene_button_size = Vec2::new(label_width + 40.0, ui.spacing().interact_size.y);
+            ui.add_enabled_ui(editor_enabled, |ui| egui::menu::menu_custom_button(
+                ui,
+                egui::Button::new(scene_menu_label).min_size(scene_button_size),
+                |ui| {
                 for (index, name) in scene_names.iter().enumerate() {
-                    if ui.selectable_label(index == active_scene, name).clicked() {
+                    let response = ui.selectable_label(index == active_scene, name);
+                    if response.clicked() {
                         self.scene_switch_requested = Some(index);
                         ui.close_menu();
                     }
+                    response.context_menu(|ui| {
+                        if ui.button("Renommer…").clicked() {
+                            self.scene_rename_requested = Some(index);
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(scene_names.len() > 1, egui::Button::new("Supprimer" )).clicked() {
+                            self.scene_delete_requested = Some(index);
+                            ui.close_menu();
+                        }
+                    });
                 }
                 ui.separator();
                 if ui.button("+ Nouvelle scène").clicked() {

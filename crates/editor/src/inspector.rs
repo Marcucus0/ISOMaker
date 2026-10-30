@@ -2,9 +2,17 @@
 
 use egui::{CollapsingHeader, Grid, Ui};
 use world::{
-    object::{ObjectId, ObjectType, PropValue, Rotation4},
+    layer::Layer,
+    object::{CustomObjectTypeDefinition, CustomPropertyDefinition, CustomPropertyKind, ObjectId, ObjectType, PropValue, Rotation4},
     scene::Scene,
 };
+use crate::panels::{custom_property_kind_label, default_custom_property_value, is_valid_property_key, show_custom_property_default};
+
+#[derive(Debug, Default)]
+pub struct TypeDefinitionEdit {
+    pub changed: bool,
+    pub renamed_property: Option<(uuid::Uuid, String, String)>,
+}
 
 /// Panneau de droite : affiche et édite les propriétés de l'objet sélectionné.
 pub struct Inspector;
@@ -18,6 +26,8 @@ impl Inspector {
         scene: &mut Scene,
         selected: Option<ObjectId>,
         selected_count: usize,
+        custom_object_types: &[CustomObjectTypeDefinition],
+        scene_names: &[String],
         request_texture_picker: &mut bool,
         request_script_picker: &mut bool,
         request_script_create: &mut bool,
@@ -46,6 +56,8 @@ impl Inspector {
         let mut tile_x = obj.tile_pos.x;
         let mut tile_y = obj.tile_pos.y;
         let mut tile_z = obj.tile_pos.z;
+        let mut footprint_width = obj.footprint.width.max(1);
+        let mut footprint_height = obj.footprint.height.max(1);
         let mut rotation = obj.rotation;
         let mut has_collisions = obj.has_collisions;
         let mut hidden = obj.hidden;
@@ -124,6 +136,21 @@ impl Inspector {
                             modified = true;
                         }
                         ui.end_row();
+
+                        if !is_camera {
+                            ui.label("Empreinte (tuiles)");
+                            ui.horizontal(|ui| {
+                                ui.label("Largeur");
+                                if ui.add(egui::DragValue::new(&mut footprint_width).range(1..=256)).changed() {
+                                    modified = true;
+                                }
+                                ui.label("Hauteur");
+                                if ui.add(egui::DragValue::new(&mut footprint_height).range(1..=256)).changed() {
+                                    modified = true;
+                                }
+                            });
+                            ui.end_row();
+                        }
 
                         if !is_camera {
                             ui.label("Rotation");
@@ -303,18 +330,21 @@ impl Inspector {
                 });
             });
 
-        let mut custom_keys: Vec<_> = props
-            .keys()
-            .filter(|key| key.as_str() != "texture")
-            .cloned()
-            .collect();
+        let custom_definition = obj.custom_type_id
+            .and_then(|type_id| custom_object_types.iter().find(|definition| definition.id == type_id));
+        let declared_keys: std::collections::HashSet<&str> = custom_definition
+            .into_iter().flat_map(|definition| definition.properties.iter())
+            .map(|property| property.key.as_str()).collect();
+        let mut custom_keys: Vec<_> = props.keys()
+            .filter(|key| key.as_str() != "texture" && !declared_keys.contains(key.as_str()))
+            .cloned().collect();
         custom_keys.sort();
-        let custom_count = custom_keys.len();
+        let custom_count = custom_keys.len() + custom_definition.map_or(0, |definition| definition.properties.len());
         CollapsingHeader::new(format!("Propriétés personnalisées ({custom_count})"))
             .id_salt("inspector_custom_properties")
             .default_open(true)
             .show(ui, |ui| {
-                if custom_keys.is_empty() {
+                if custom_count == 0 {
                     ui.label(egui::RichText::new("Aucune propriété personnalisée")
                         .color(egui::Color32::GRAY).italics());
                 } else {
@@ -323,6 +353,17 @@ impl Inspector {
                         .spacing([8.0, 4.0])
                         .striped(true)
                         .show(ui, |ui| {
+                            if let Some(definition) = custom_definition {
+                                for property in &definition.properties {
+                                    let value = props.entry(property.key.clone())
+                                        .or_insert_with(|| property.default_value.clone());
+                                    ui.label(&property.key);
+                                    if show_custom_property_editor(ui, definition.id, property, value, scene_names) {
+                                        modified = true;
+                                    }
+                                    ui.end_row();
+                                }
+                            }
                             for key in &custom_keys {
                                 if let Some(value) = props.get(key) {
                                     ui.label(key);
@@ -340,6 +381,8 @@ impl Inspector {
                 obj.tile_pos.x = tile_x;
                 obj.tile_pos.y = tile_y;
                 obj.tile_pos.z = tile_z;
+                obj.footprint.width = footprint_width.max(1);
+                obj.footprint.height = footprint_height.max(1);
                 obj.rotation = rotation;
                 obj.camera_zoom = camera_zoom.clamp(0.1, 10.0);
                 obj.camera_interpolation = camera_interpolation;
@@ -381,6 +424,202 @@ impl Inspector {
 
         modified
     }
+
+    pub fn show_type_definition(
+        ui: &mut Ui,
+        type_id: uuid::Uuid,
+        object_types: &mut [CustomObjectTypeDefinition],
+        scene_names: &[String],
+        request_texture_picker: &mut bool,
+        request_script_picker: &mut bool,
+    ) -> TypeDefinitionEdit {
+        let mut edit = TypeDefinitionEdit::default();
+        let Some(index) = object_types.iter().position(|definition| definition.id == type_id) else {
+            ui.label("Sélectionne un type d’objet dans l’onglet Types.");
+            return edit;
+        };
+        let other_names: Vec<_> = object_types.iter().enumerate()
+            .filter(|(other_index, _)| *other_index != index)
+            .map(|(_, definition)| definition.name.to_lowercase()).collect();
+        let definition = &mut object_types[index];
+
+        ui.heading(format!("Type : {}", definition.name));
+        ui.separator();
+        ui.label(egui::RichText::new("Définition du type").strong());
+        ui.horizontal(|ui| {
+            ui.label("Nom");
+            let mut proposed = definition.name.clone();
+            if ui.text_edit_singleline(&mut proposed).changed() {
+                let valid = !proposed.trim().is_empty()
+                    && !other_names.iter().any(|name| name == &proposed.trim().to_lowercase());
+                if valid {
+                    definition.name = proposed.trim().to_owned();
+                    edit.changed = true;
+                }
+            }
+        });
+
+        egui::CollapsingHeader::new("Propriétés génériques par défaut")
+            .default_open(true)
+            .show(ui, |ui| {
+                let changed = ui.checkbox(&mut definition.defaults.has_collisions, "Collisions activées").changed()
+                    | ui.checkbox(&mut definition.defaults.hidden, "Masqué").changed()
+                    | ui.checkbox(&mut definition.defaults.fit_texture_to_diamond, "Ajuster la texture au losange").changed();
+                edit.changed |= changed;
+                ui.horizontal(|ui| {
+                    ui.label("Empreinte");
+                    let width = ui.add(egui::DragValue::new(&mut definition.defaults.footprint.width).range(1..=256).prefix("L ")).changed();
+                    let height = ui.add(egui::DragValue::new(&mut definition.defaults.footprint.height).range(1..=256).prefix("H ")).changed();
+                    if width || height {
+                        definition.defaults.footprint.width = definition.defaults.footprint.width.max(1);
+                        definition.defaults.footprint.height = definition.defaults.footprint.height.max(1);
+                        edit.changed = true;
+                    }
+                });
+                egui::ComboBox::from_id_salt(("custom_type_rotation", type_id))
+                    .selected_text(format!("Rotation : {:?}", definition.defaults.rotation))
+                    .show_ui(ui, |ui| {
+                        for rotation in [Rotation4::North, Rotation4::East, Rotation4::South, Rotation4::West] {
+                            edit.changed |= ui.selectable_value(&mut definition.defaults.rotation, rotation, format!("{rotation:?}")).changed();
+                        }
+                    });
+                let layer_names = ["Terrain", "Décoration", "Ground", "Objects", "Buildings", "Foreground", "Overlay"];
+                let layers = [Layer::Terrain, Layer::Decoration, Layer::Ground, Layer::Objects, Layer::Buildings, Layer::Foreground, Layer::Overlay];
+                let layer_index = definition.defaults.layer.sort_key() as usize;
+                egui::ComboBox::from_id_salt(("custom_type_layer", type_id))
+                    .selected_text(format!("Couche : {}", layer_names.get(layer_index).copied().unwrap_or("Objects")))
+                    .show_ui(ui, |ui| {
+                        for (index, layer) in layers.into_iter().enumerate() {
+                            edit.changed |= ui.selectable_value(&mut definition.defaults.layer, layer, layer_names[index]).changed();
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.label("Texture");
+                    let mut texture = definition.defaults.texture.clone().unwrap_or_default();
+                    if ui.text_edit_singleline(&mut texture).changed() {
+                        definition.defaults.texture = (!texture.trim().is_empty()).then(|| texture.trim().to_owned());
+                        edit.changed = true;
+                    }
+                    if ui.small_button("…").on_hover_text("Choisir une texture").clicked() {
+                        *request_texture_picker = true;
+                    }
+                    if definition.defaults.texture.is_some() && ui.small_button("×").clicked() {
+                        definition.defaults.texture = None;
+                        edit.changed = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Script Python");
+                    let mut script = definition.defaults.script.clone().unwrap_or_default();
+                    if ui.text_edit_singleline(&mut script).changed() {
+                        definition.defaults.script = (!script.trim().is_empty()).then(|| script.trim().to_owned());
+                        edit.changed = true;
+                    }
+                    if ui.small_button("…").on_hover_text("Choisir un script Python").clicked() {
+                        *request_script_picker = true;
+                    }
+                    if definition.defaults.script.is_some() && ui.small_button("×").on_hover_text("Retirer le script").clicked() {
+                        definition.defaults.script = None;
+                        edit.changed = true;
+                    }
+                });
+            });
+
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Propriétés personnalisées").strong());
+            if ui.small_button("+ Ajouter").clicked() {
+                let mut number = 1;
+                let key = loop {
+                    let candidate = format!("propriete_{number}");
+                    if !definition.properties.iter().any(|property| property.key == candidate) { break candidate; }
+                    number += 1;
+                };
+                definition.properties.push(CustomPropertyDefinition {
+                    key, kind: CustomPropertyKind::Text, default_value: PropValue::Str(String::new()),
+                });
+                edit.changed = true;
+            }
+        });
+        let mut remove = None;
+        let mut keys: Vec<_> = definition.properties.iter().map(|property| property.key.clone()).collect();
+        for (property_index, property) in definition.properties.iter_mut().enumerate() {
+            ui.separator();
+            ui.horizontal(|ui| {
+                let old_key = property.key.clone();
+                let response = ui.add(egui::TextEdit::singleline(&mut property.key).desired_width(110.0));
+                if response.changed() {
+                    let valid = is_valid_property_key(&property.key) && property.key != "texture";
+                    let unique = keys.iter().enumerate().all(|(i, key)| i == property_index || key != &property.key);
+                    if valid && unique {
+                        keys[property_index] = property.key.clone();
+                        edit.renamed_property = Some((type_id, old_key, property.key.clone()));
+                        edit.changed = true;
+                    } else {
+                        property.key = old_key;
+                    }
+                }
+                egui::ComboBox::from_id_salt(("custom_property_kind", type_id, property_index))
+                    .selected_text(custom_property_kind_label(property.kind))
+                    .show_ui(ui, |ui| {
+                        for kind in [CustomPropertyKind::Text, CustomPropertyKind::Integer, CustomPropertyKind::Float, CustomPropertyKind::Boolean, CustomPropertyKind::Scene] {
+                            if ui.selectable_value(&mut property.kind, kind, custom_property_kind_label(kind)).changed() {
+                                property.default_value = default_custom_property_value(kind, scene_names);
+                                edit.changed = true;
+                            }
+                        }
+                    });
+                if ui.small_button("×").on_hover_text("Retirer cette propriété").clicked() {
+                    remove = Some(property_index);
+                }
+            });
+            edit.changed |= show_custom_property_default(ui, type_id, property_index, property, scene_names);
+        }
+        if let Some(index) = remove {
+            definition.properties.remove(index);
+            edit.changed = true;
+        }
+        edit
+    }
+}
+
+fn show_custom_property_editor(
+    ui: &mut Ui,
+    type_id: uuid::Uuid,
+    definition: &CustomPropertyDefinition,
+    value: &mut PropValue,
+    scene_names: &[String],
+) -> bool {
+    let mut changed = false;
+    match (definition.kind, &mut *value) {
+        (CustomPropertyKind::Text, PropValue::Str(value)) => {
+            changed |= ui.text_edit_singleline(value).changed();
+        }
+        (CustomPropertyKind::Integer, PropValue::Int(value)) => {
+            changed |= ui.add(egui::DragValue::new(value)).changed();
+        }
+        (CustomPropertyKind::Float, PropValue::Float(value)) => {
+            changed |= ui.add(egui::DragValue::new(value).speed(0.1)).changed();
+        }
+        (CustomPropertyKind::Boolean, PropValue::Bool(value)) => {
+            changed |= ui.checkbox(value, "Activée").changed();
+        }
+        (CustomPropertyKind::Scene, PropValue::Str(value)) => {
+            let label = if value.is_empty() { "Choisir une scène…" } else { value.as_str() };
+            egui::ComboBox::from_id_salt(("inspector_scene_property", type_id, &definition.key))
+                .selected_text(label)
+                .show_ui(ui, |ui| {
+                    for scene_name in scene_names {
+                        changed |= ui.selectable_value(value, scene_name.clone(), scene_name).changed();
+                    }
+                });
+        }
+        _ => {
+            *value = definition.default_value.clone();
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn prop_value_str(value: &PropValue) -> String {

@@ -26,3 +26,12 @@ Vérification effectuée le 29 octobre 2026 :
 
 enfin : 
 tu vas faire un changelog, le git add, faire le commit et le push
+
+Vérification effectuée pour la release 0.2.0 le 30 octobre 2026 :
+
+- Documentation contrôlée : `ARCHITECTURE.md`, `PROGRESSION.md`, `PYTHON_API.md` et README actualisés.
+- Paramètres VS Code et snippets contrôlés ; le stub API reste référencé dans `.vscode/settings.json` et les snippets sont valides en JSON.
+- `cargo check --workspace` : réussi sans avertissement.
+- `cargo build --release -p editor` : réussi.
+- `cargo test --workspace` dans `target/release-check` : 29 tests réussis.
+- `python -m unittest discover -s python/tests -v` : 5 tests réussis.

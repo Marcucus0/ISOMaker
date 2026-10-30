@@ -18,7 +18,12 @@ use editor::EditorApp;
 
 fn main() {
     // Initialise le logger (affiche dans la console).
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    let mut logger = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info"),
+    );
+    // Keep engine info logs while hiding wgpu's per-frame submission waits.
+    logger.filter_module("wgpu_core::device::resource", log::LevelFilter::Warn);
+    logger.init();
 
     log::info!("=== Moteur de jeu 2D isométrique ===");
 
@@ -220,14 +225,14 @@ impl ApplicationHandler for App {
             if let WindowEvent::KeyboardInput { event: key_event, .. } = &event {
                 if key_event.state == ElementState::Pressed && !key_event.repeat {
                     let shortcut = match key_event.physical_key {
-                        PhysicalKey::Code(KeyCode::KeyC) => Some(Shortcut::TileCopy),
-                        PhysicalKey::Code(KeyCode::KeyV) => Some(Shortcut::TilePaste),
+                        PhysicalKey::Code(KeyCode::KeyC) => Some(Shortcut::Copy),
+                        PhysicalKey::Code(KeyCode::KeyV) => Some(Shortcut::Paste),
                         _ => None,
                     };
                     if let Some(shortcut) = shortcut {
                         let handled = match shortcut {
-                            Shortcut::TileCopy => app.editor.queue_tile_clipboard_shortcut(true),
-                            Shortcut::TilePaste => app.editor.queue_tile_clipboard_shortcut(false),
+                            Shortcut::Copy => app.editor.queue_clipboard_shortcut(true),
+                            Shortcut::Paste => app.editor.queue_clipboard_shortcut(false),
                         };
                         if handled {
                             app.window.request_redraw();
@@ -369,8 +374,8 @@ impl ApplicationHandler for App {
 
 #[derive(Clone, Copy)]
 enum Shortcut {
-    TileCopy,
-    TilePaste,
+    Copy,
+    Paste,
 }
 
 fn map_key(code: KeyCode) -> Option<engine::Key> {

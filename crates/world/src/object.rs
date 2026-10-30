@@ -1,4 +1,4 @@
-//! Objets de scène : instances, types, prefabs.
+//! Objets et instances de scène.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -110,6 +110,70 @@ pub enum PropValue {
     List(Vec<PropValue>),
 }
 
+/// Type d'une propriété déclarée sur un type d'objet personnalisé.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CustomPropertyKind {
+    Text,
+    Integer,
+    Float,
+    Boolean,
+    Scene,
+}
+
+/// Schéma commun d'une propriété ; sa valeur initiale est copiée dans chaque instance.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomPropertyDefinition {
+    pub key: String,
+    pub kind: CustomPropertyKind,
+    pub default_value: PropValue,
+}
+
+/// Valeurs initiales des propriétés génériques pour les nouvelles instances d'un type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ObjectTypeDefaults {
+    pub has_collisions: bool,
+    pub hidden: bool,
+    pub fit_texture_to_diamond: bool,
+    pub texture: Option<String>,
+    pub script: Option<String>,
+    pub footprint: TileSize,
+    pub rotation: Rotation4,
+    pub layer: Layer,
+}
+
+impl Default for ObjectTypeDefaults {
+    fn default() -> Self {
+        Self {
+            has_collisions: false,
+            hidden: false,
+            fit_texture_to_diamond: true,
+            texture: None,
+            script: None,
+            footprint: TileSize::default(),
+            rotation: Rotation4::default(),
+            layer: Layer::default(),
+        }
+    }
+}
+
+/// Définition de projet d'un type d'objet personnalisé.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CustomObjectTypeDefinition {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub properties: Vec<CustomPropertyDefinition>,
+    #[serde(default)]
+    pub defaults: ObjectTypeDefaults,
+}
+
+impl CustomObjectTypeDefinition {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { id: Uuid::new_v4(), name: name.into(), properties: Vec::new(), defaults: ObjectTypeDefaults::default() }
+    }
+}
+
 impl PropValue {
     pub fn as_str(&self) -> Option<&str> {
         if let PropValue::Str(s) = self { Some(s) } else { None }
@@ -134,6 +198,9 @@ pub struct SceneObject {
     pub name: String,
     /// Catégorie sémantique.
     pub object_type: ObjectType,
+    /// Identifiant de la définition de type personnalisée du projet, si applicable.
+    #[serde(default)]
+    pub custom_type_id: Option<Uuid>,
     /// Indique si l'objet participe aux collisions.
     #[serde(default)]
     pub has_collisions: bool,
@@ -166,7 +233,7 @@ pub struct SceneObject {
     /// Vitesse de convergence du suivi, en unités d'interpolation par seconde.
     #[serde(default = "default_camera_interpolation_speed")]
     pub camera_interpolation_speed: f32,
-    /// Référence à un prefab si l'objet est une instance.
+    /// Ancienne référence de prefab, conservée pour lire les projets existants.
     pub prefab_id: Option<Uuid>,
 }
 
@@ -176,6 +243,7 @@ impl SceneObject {
             id: ObjectId::new(),
             name: name.into(),
             object_type,
+            custom_type_id: None,
             has_collisions: false,
             hidden: false,
             tile_pos,

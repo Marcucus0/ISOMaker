@@ -1,0 +1,59 @@
+{
+  "Zone entered callback": {
+    "scope": "python",
+    "prefix": "_on_area_entered",
+    "description": "Callback moteur appelé quand un objet entre dans la zone",
+    "body": [
+      "def _on_area_entered(game: GameContext, other: GameObject) -> None:",
+      "    \"\"\"Appelé une fois quand un objet entre dans cette zone.\"\"\"",
+      "    if other.name == \"${1:Personnage}\":",
+      "        ${2:game.log(\"Zone activée\")}",
+      ""
+    ]
+  },
+  "Zone stayed callback": {
+    "scope": "python",
+    "prefix": "_on_area_stayed",
+    "description": "Callback moteur appelé à chaque frame pendant le chevauchement",
+    "body": [
+      "def _on_area_stayed(game: GameContext, other: GameObject) -> None:",
+      "    \"\"\"Appelé à chaque frame tant qu'un objet reste dans cette zone.\"\"\"",
+      "    ${1:pass}",
+      ""
+    ]
+  },
+  "Zone exited callback": {
+    "scope": "python",
+    "prefix": "_on_area_exited",
+    "description": "Callback moteur appelé quand un objet quitte la zone",
+    "body": [
+      "def _on_area_exited(game: GameContext, other: GameObject) -> None:",
+      "    \"\"\"Appelé une fois quand un objet quitte cette zone.\"\"\"",
+      "    if other.name == \"${1:Personnage}\":",
+      "        ${2:game.log(\"Zone relâchée\")}",
+      ""
+    ]
+  },
+  "Game launch callback": {
+    "scope": "python",
+    "prefix": "_on_game_launch",
+    "description": "Callback moteur appelé une fois au démarrage de la lecture",
+    "body": [
+      "def _on_game_launch(game: GameContext) -> None:",
+      "    \"\"\"Appelé une fois au lancement de la partie.\"\"\"",
+      "    ${1:pass}",
+      ""
+    ]
+  },
+  "Update callback": {
+    "scope": "python",
+    "prefix": "_on_update",
+    "description": "Callback moteur appelé à chaque mise à jour du jeu",
+    "body": [
+      "def _on_update(game: GameContext, delta_time: float) -> None:",
+      "    \"\"\"Appelé à chaque mise à jour de la partie.\"\"\"",
+      "    ${1:pass}",
+      ""
+    ]
+  }
+}

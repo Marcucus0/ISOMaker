@@ -93,6 +93,10 @@ pub struct PyGameObject {
     object: SceneObject,
 }
 
+impl PyGameObject {
+    pub(crate) fn from_object(object: SceneObject) -> Self { Self { object } }
+}
+
 #[pymethods]
 impl PyGameObject {
     #[getter]
@@ -405,6 +409,20 @@ impl PyGameContext {
     fn set_global(&self, key: String, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let json_value = py_any_to_json(value)?;
         self.push(GameCommand::SetGlobal { key, value: json_value })
+    }
+
+    /// Charge une autre scène du monde. Le nom doit correspondre exactement.
+    fn load_scene(&self, name: String) -> PyResult<()> {
+        self.push(GameCommand::LoadScene { name })
+    }
+
+    /// Quitte la scène active et revient à la scène précédemment chargée.
+    fn unload_scene(&self) -> PyResult<()> {
+        self.push(GameCommand::UnloadScene)
+    }
+
+    fn transfer_object(&self, object_id: String, scene_name: String, x: i32, y: i32) -> PyResult<()> {
+        self.push(GameCommand::TransferObject { object_id, scene_name, x, y })
     }
 
     /// Émet un message de log depuis le script.

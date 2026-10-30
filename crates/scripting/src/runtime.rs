@@ -102,7 +102,8 @@ impl ScriptRuntime {
         })?;
         let hooks = Python::with_gil(|py| {
             let module = module.bind(py);
-            ["on_update", "_on_update", "on_start", "_on_game_launch", "on_stop"]
+            ["on_update", "_on_update", "on_start", "_on_game_launch", "on_stop",
+             "_on_area_entered", "_on_area_stayed", "_on_area_exited"]
                 .into_iter()
                 .filter_map(|hook| module.hasattr(hook).ok().filter(|exists| *exists).map(|_| hook.to_owned()))
                 .collect()
@@ -168,6 +169,75 @@ impl ScriptRuntime {
 
     pub fn has_object_update(&self) -> bool {
         self.has_hook("_on_update", HookTarget::Objects)
+    }
+
+    pub fn object_has_area_hooks(&self, object_id: &str) -> bool {
+        self.scripts.iter().any(|script| {
+            matches!(&script.kind, ScriptKind::Object(id) if id == object_id)
+                && ["_on_area_entered", "_on_area_stayed", "_on_area_exited"]
+                    .iter().any(|hook| script.hooks.contains(*hook))
+        })
+    }
+
+    /// Appelle un événement de zone sur le script de l'objet qui porte la zone.
+    pub fn call_object_area_event(
+        &self,
+        hook: &str,
+        area_id: &str,
+        other_id: &str,
+        delta_time: f32,
+        objects: &[ObjectScriptState],
+        input: &InputState,
+    ) -> Result<Vec<GameCommand>, ScriptError> {
+        if !["_on_area_entered", "_on_area_stayed", "_on_area_exited"].contains(&hook) {
+            return Err(ScriptError::Python(format!("Événement de zone inconnu : {hook}")));
+        }
+        let Some(other) = objects.iter().find(|object| object.id.to_string() == other_id).cloned() else {
+            return Ok(Vec::new());
+        };
+        let mut queue = self.queue.lock().map_err(|_| ScriptError::LockError)?;
+        queue.clear();
+        drop(queue);
+
+        let scene_objects = Arc::new(objects.to_vec());
+        let mut script_errors = Vec::new();
+        Python::with_gil(|py| {
+            for loaded in &self.scripts {
+                let ScriptKind::Object(id) = &loaded.kind else { continue };
+                if id != area_id || !loaded.hooks.contains(hook) { continue; }
+                let Some(area) = objects.iter().find(|object| object.id.to_string() == *id).cloned() else {
+                    continue;
+                };
+                let module = loaded.module.bind(py);
+                let func = match module.getattr(hook) {
+                    Ok(function) => function,
+                    Err(_) => continue,
+                };
+                let script_file = loaded.path.file_name().and_then(|name| name.to_str())
+                    .unwrap_or("script Python");
+                let script_source = format!("{script_file} — {}", area.name);
+                let ctx = PyGameContext::new(
+                    Arc::clone(&self.queue), delta_time, Some(id.clone()),
+                    Some((area.tile_pos.x, area.tile_pos.y, area.tile_pos.z)),
+                    Some(area), Arc::clone(&scene_objects), input.clone(), script_source,
+                );
+                let py_ctx = Py::new(py, ctx)
+                    .map_err(|error| ScriptError::Python(error.to_string()))?;
+                let py_other = Py::new(py, crate::api::PyGameObject::from_object(other.clone()))
+                    .map_err(|error| ScriptError::Python(error.to_string()))?;
+                if let Err(error) = func.call1((py_ctx, py_other)) {
+                    script_errors.push(format!("{} ({hook}) : {error}", loaded.path.display()));
+                }
+            }
+            Ok::<(), ScriptError>(())
+        })?;
+
+        let commands = self.queue.lock().map_err(|_| ScriptError::LockError)?.drain(..).collect();
+        if script_errors.is_empty() {
+            Ok(commands)
+        } else {
+            Err(ScriptError::Python(script_errors.join("\n")))
+        }
     }
 
     fn has_hook(&self, hook: &str, target: HookTarget) -> bool {

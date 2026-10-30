@@ -241,6 +241,11 @@ class GameContext:
         """Trouve le premier objet de nom exact, ou None si absent."""
         ...
 
+    # Hooks disponibles sur le script d'un objet qui sert de zone :
+    # def _on_area_entered(game: GameContext, other: GameObject) -> None: ...
+    # def _on_area_stayed(game: GameContext, other: GameObject) -> None: ...
+    # def _on_area_exited(game: GameContext, other: GameObject) -> None: ...
+
     def spawn(
         self,
         name: str,
@@ -299,6 +304,18 @@ class GameContext:
             key: Clé de la valeur.
             value: Valeur (types de base Python uniquement).
         """
+        ...
+
+    def load_scene(self, name: str) -> None:
+        """Charge la scène du monde portant ce nom et empile la scène courante."""
+        ...
+
+    def unload_scene(self) -> None:
+        """Quitte la scène active et revient à la précédente, si elle existe."""
+        ...
+
+    def transfer_object(self, object_id: str, scene_name: str, x: int, y: int) -> None:
+        """Déplace l'objet vers une scène sans l'activer, en conservant son identifiant et ses propriétés."""
         ...
 
     def log(self, message: str) -> None:
