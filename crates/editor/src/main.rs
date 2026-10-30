@@ -258,13 +258,17 @@ impl ApplicationHandler for App {
 
         // Transmet l'événement à egui.
         let resp = app.egui_state.on_window_event(&app.window, &event);
-        if resp.consumed && !matches!(event, WindowEvent::RedrawRequested) { return; }
+        if resp.consumed && !matches!(event, WindowEvent::RedrawRequested | WindowEvent::CloseRequested) { return; }
 
         match event {
             WindowEvent::CloseRequested => {
                 log::info!("Fermeture demandée.");
-                app.editor.shutdown_player();
-                event_loop.exit();
+                if app.editor.request_close() {
+                    app.editor.shutdown_player();
+                    event_loop.exit();
+                } else {
+                    app.window.request_redraw();
+                }
             }
 
             WindowEvent::Resized(size) => {
@@ -302,6 +306,7 @@ impl ApplicationHandler for App {
                 let full_output = app.egui_ctx.run(raw_input, |ctx| {
                     app.editor.update(ctx, delta);
                 });
+                let close_app = app.editor.take_exit_request();
                 // Les événements edge ne valent que pour ce callback de jeu.
                 app.editor.state.input.begin_frame();
 
@@ -356,6 +361,12 @@ impl ApplicationHandler for App {
 
                 app.queue.submit(std::iter::once(encoder.finish()));
                 output.present();
+
+                if close_app {
+                    app.editor.shutdown_player();
+                    event_loop.exit();
+                    return;
+                }
 
                 // Redemande un frame immédiatement (mode Poll).
                 app.window.request_redraw();

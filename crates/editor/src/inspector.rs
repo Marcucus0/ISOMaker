@@ -28,6 +28,8 @@ impl Inspector {
         selected_count: usize,
         custom_object_types: &[CustomObjectTypeDefinition],
         scene_names: &[String],
+        recent_textures: &[String],
+        recent_scripts: &[String],
         request_texture_picker: &mut bool,
         request_script_picker: &mut bool,
         request_script_create: &mut bool,
@@ -252,7 +254,13 @@ impl Inspector {
                         if !is_camera {
                             ui.label("Texture");
                             ui.horizontal(|ui| {
-                                if ui.text_edit_singleline(&mut texture_path).changed() {
+                                if recent_asset_path_field(
+                                    ui,
+                                    ("object_texture", id),
+                                    &mut texture_path,
+                                    recent_textures,
+                                    &["png", "jpg", "jpeg", "gif"],
+                                ) {
                                     modified = true;
                                 }
                                 if ui
@@ -318,10 +326,16 @@ impl Inspector {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Script Python");
-                    if ui.text_edit_singleline(&mut script).changed() {
+                    if recent_asset_path_field(
+                        ui,
+                        ("object_script", id),
+                        &mut script,
+                        recent_scripts,
+                        &["py"],
+                    ) {
                         modified = true;
                     }
-                    if ui.small_button("Choisir…").clicked() {
+                    if ui.small_button("…").on_hover_text("Choisir un script Python").clicked() {
                         *request_script_picker = true;
                     }
                     if ui.small_button("Créer…").clicked() {
@@ -430,6 +444,8 @@ impl Inspector {
         type_id: uuid::Uuid,
         object_types: &mut [CustomObjectTypeDefinition],
         scene_names: &[String],
+        recent_textures: &[String],
+        recent_scripts: &[String],
         request_texture_picker: &mut bool,
         request_script_picker: &mut bool,
     ) -> TypeDefinitionEdit {
@@ -496,7 +512,13 @@ impl Inspector {
                 ui.horizontal(|ui| {
                     ui.label("Texture");
                     let mut texture = definition.defaults.texture.clone().unwrap_or_default();
-                    if ui.text_edit_singleline(&mut texture).changed() {
+                    if recent_asset_path_field(
+                        ui,
+                        ("type_texture", type_id),
+                        &mut texture,
+                        recent_textures,
+                        &["png", "jpg", "jpeg", "gif"],
+                    ) {
                         definition.defaults.texture = (!texture.trim().is_empty()).then(|| texture.trim().to_owned());
                         edit.changed = true;
                     }
@@ -511,7 +533,13 @@ impl Inspector {
                 ui.horizontal(|ui| {
                     ui.label("Script Python");
                     let mut script = definition.defaults.script.clone().unwrap_or_default();
-                    if ui.text_edit_singleline(&mut script).changed() {
+                    if recent_asset_path_field(
+                        ui,
+                        ("type_script", type_id),
+                        &mut script,
+                        recent_scripts,
+                        &["py"],
+                    ) {
                         definition.defaults.script = (!script.trim().is_empty()).then(|| script.trim().to_owned());
                         edit.changed = true;
                     }
@@ -581,6 +609,52 @@ impl Inspector {
         }
         edit
     }
+}
+
+fn recent_asset_path_field(
+    ui: &mut Ui,
+    salt: impl std::hash::Hash,
+    value: &mut String,
+    recent_paths: &[String],
+    allowed_extensions: &[&str],
+) -> bool {
+    let response = ui.push_id(salt, |ui| ui.text_edit_singleline(value)).inner;
+    let popup_id = response.id.with("recent_asset_suggestions");
+    let matching_paths = recent_paths.iter().filter(|path| {
+        std::path::Path::new(path).extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| allowed_extensions.iter().any(|allowed| extension.eq_ignore_ascii_case(allowed)))
+    }).take(12).collect::<Vec<_>>();
+
+    if !matching_paths.is_empty() && (response.clicked() || response.gained_focus()) {
+        ui.memory_mut(|memory| memory.open_popup(popup_id));
+    }
+
+    let mut selected = false;
+    if !matching_paths.is_empty() && ui.memory(|memory| memory.is_popup_open(popup_id)) {
+        egui::popup::popup_below_widget(
+            ui,
+            popup_id,
+            &response,
+            egui::PopupCloseBehavior::CloseOnClickOutside,
+            |ui| {
+                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                    for path in &matching_paths {
+                        if ui.selectable_label(false, path.as_str())
+                            .on_hover_text(path.as_str()).clicked()
+                        {
+                            *value = (*path).clone();
+                            selected = true;
+                        }
+                    }
+                });
+            },
+        );
+    }
+    if selected {
+        ui.memory_mut(|memory| memory.close_popup());
+    }
+    response.changed() || selected
 }
 
 fn show_custom_property_editor(

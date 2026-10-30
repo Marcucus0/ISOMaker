@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.0 — 2026-10-30
+
+### Ajouté
+
+- Suggestions des douze derniers fichiers choisis dans les champs de texture
+  et de script Python de l'inspecteur et des définitions de type, avec listes
+  séparées par format ; le sélecteur Windows reste disponible.
+- Confirmation avant de quitter si le projet comporte des modifications non
+  enregistrées, avec les choix sauvegarder, quitter sans sauvegarder et annuler.
+  Cette confirmation peut être désactivée dans les paramètres de l'éditeur.
+- Raccourcis `F` pour Peindre et `G` pour Gomme.
+
+### Optimisé et modifié
+
+- Regroupement des tuiles, textures et lignes de grille en meshes, réduisant
+  le travail de dessin par frame. La mesure faite sur la scène de référence a
+  montré un gain d'environ 10 FPS.
+- Évite les copies des objets et le calcul des chevauchements lorsque les hooks
+  Python correspondants ne sont pas chargés.
+- La molette du viewport est désactivée en Lecture et Pause.
+
+### Vérification
+
+- `cargo check --workspace` et `cargo build --release -p editor`.
+- `cargo test --workspace` et `python -m unittest discover -s python/tests -v`.
+- Paramètres VS Code et snippets Python contrôlés.
+
 ## 0.2.0 — 2026-10-30
 
 ### Ajouté

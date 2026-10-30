@@ -233,11 +233,14 @@ impl SceneView {
 
         // ── Gestion des entrées ───────────────────────────────────────────────
 
-        // Scroll = zoom.
-        if let Some(hover_pos) = response.hover_pos() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll != 0.0 {
-                self.camera.zoom_at(hover_pos.to_vec2() - center, scroll);
+        // La molette ne pilote le zoom qu'en mode édition ; en Lecture et
+        // Pause, elle ne doit pas modifier la caméra du jeu.
+        if interactive {
+            if let Some(hover_pos) = response.hover_pos() {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll != 0.0 {
+                    self.camera.zoom_at(hover_pos.to_vec2() - center, scroll);
+                }
             }
         }
 
@@ -699,6 +702,14 @@ impl SceneView {
         let half_width = proj.half_width() * zoom * step as f32;
         let half_height = proj.half_height() * zoom * step as f32;
 
+        // Batch tile fills by texture and combine all colored fills/overlays
+        // into a handful of meshes instead of creating a shape per tile edge.
+        let mut colored_tiles = egui::Mesh::default();
+        let mut textured_tiles: HashMap<egui::TextureId, egui::Mesh> = HashMap::new();
+        let mut selection_mesh = egui::Mesh::default();
+        let mut hover_mesh = egui::Mesh::default();
+        let mut grid_mesh = egui::Mesh::default();
+
         for y in (min_y..=max_y).step_by(step as usize) {
             for x in (min_x..=max_x).step_by(step as usize) {
                 let tile = TilePos::new(x, y);
@@ -742,27 +753,22 @@ impl SceneView {
                                 .unwrap_or(0);
                             let uvs: [egui::Pos2; 4] =
                                 std::array::from_fn(|index| base_uvs[(index + rotation) % 4]);
-                            let mut mesh = egui::Mesh::with_texture(texture_id);
+                            let mesh = textured_tiles.entry(texture_id)
+                                .or_insert_with(|| egui::Mesh::with_texture(texture_id));
                             let first = mesh.vertices.len() as u32;
                             for (position, uv) in corners.into_iter().zip(uvs) {
                                 mesh.vertices.push(egui::epaint::Vertex { pos: position, uv, color: Color32::WHITE });
                             }
                             mesh.add_triangle(first, first + 1, first + 2);
                             mesh.add_triangle(first, first + 2, first + 3);
-                            painter.add(egui::Shape::mesh(mesh));
                         } else {
-                            painter.add(egui::Shape::convex_polygon(
-                                corners.to_vec(), tile_type_color(tile_data.tile_type, &definitions_by_id), Stroke::NONE,
-                            ));
+                            append_colored_quad(&mut colored_tiles, corners, tile_type_color(tile_data.tile_type, &definitions_by_id));
                         }
                         }
                     }
                     if !runtime_view && self.selected_tiles.contains(&tile) {
-                        painter.add(egui::Shape::convex_polygon(
-                            corners.to_vec(),
-                            Color32::from_rgba_unmultiplied(70, 150, 255, 34),
-                            Stroke::new(2.0_f32, self.options.selection_color),
-                        ));
+                        append_colored_quad(&mut selection_mesh, corners, Color32::from_rgba_unmultiplied(70, 150, 255, 34));
+                        append_diamond_outline(&mut selection_mesh, corners, 2.0, self.options.selection_color);
                     }
                 }
 
@@ -771,23 +777,22 @@ impl SceneView {
                     // Survol.
                     let is_hovered = detailed && self.hovered_tile == Some(tile);
                     if is_hovered {
-                        painter.add(egui::Shape::convex_polygon(
-                            corners.to_vec(),
-                            self.options.hover_color,
-                            Stroke::NONE,
-                        ));
+                        append_colored_quad(&mut hover_mesh, corners, self.options.hover_color);
                     }
 
                     // Contour.
-                    for i in 0..4 {
-                        painter.line_segment(
-                            [corners[i], corners[(i + 1) % 4]],
-                            Stroke::new(1.0_f32, self.options.grid_color),
-                        );
-                    }
+                    append_diamond_outline(&mut grid_mesh, corners, 1.0, self.options.grid_color);
                 }
             }
         }
+
+        if !colored_tiles.is_empty() { painter.add(egui::Shape::mesh(colored_tiles)); }
+        for mesh in textured_tiles.into_values() {
+            if !mesh.is_empty() { painter.add(egui::Shape::mesh(mesh)); }
+        }
+        if !selection_mesh.is_empty() { painter.add(egui::Shape::mesh(selection_mesh)); }
+        if !hover_mesh.is_empty() { painter.add(egui::Shape::mesh(hover_mesh)); }
+        if !grid_mesh.is_empty() { painter.add(egui::Shape::mesh(grid_mesh)); }
     }
 
     /// Dessine les objets de la scène (placeholder rectangulaire coloré).
@@ -1426,6 +1431,29 @@ fn tile_type_color(tile_type: u16, definitions: &HashMap<u16, &TileDefinition>) 
             definition.color[0], definition.color[1], definition.color[2], definition.color[3],
         ))
         .unwrap_or_else(|| Color32::from_rgb(60, 60, 60))
+}
+
+fn append_colored_quad(mesh: &mut egui::Mesh, corners: [egui::Pos2; 4], color: Color32) {
+    let first = mesh.vertices.len() as u32;
+    for position in corners {
+        mesh.colored_vertex(position, color);
+    }
+    mesh.add_triangle(first, first + 1, first + 2);
+    mesh.add_triangle(first, first + 2, first + 3);
+}
+
+fn append_diamond_outline(mesh: &mut egui::Mesh, corners: [egui::Pos2; 4], width: f32, color: Color32) {
+    for index in 0..corners.len() {
+        append_mesh_line(mesh, corners[index], corners[(index + 1) % corners.len()], width, color);
+    }
+}
+
+fn append_mesh_line(mesh: &mut egui::Mesh, start: egui::Pos2, end: egui::Pos2, width: f32, color: Color32) {
+    let direction = end - start;
+    let length = direction.length();
+    if length <= f32::EPSILON { return; }
+    let normal = egui::vec2(-direction.y, direction.x) * (width * 0.5 / length);
+    append_colored_quad(mesh, [start + normal, end + normal, end - normal, start - normal], color);
 }
 
 fn tile_texture_rotation(tile: TilePos, tile_type: u16) -> usize {

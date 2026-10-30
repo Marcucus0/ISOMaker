@@ -171,6 +171,13 @@ impl ScriptRuntime {
         self.has_hook("_on_update", HookTarget::Objects)
     }
 
+    pub fn has_any_area_hooks(&self) -> bool {
+        self.scripts.iter().any(|script| {
+            ["_on_area_entered", "_on_area_stayed", "_on_area_exited"]
+                .iter().any(|hook| script.hooks.contains(*hook))
+        })
+    }
+
     pub fn object_has_area_hooks(&self, object_id: &str) -> bool {
         self.scripts.iter().any(|script| {
             matches!(&script.kind, ScriptKind::Object(id) if id == object_id)

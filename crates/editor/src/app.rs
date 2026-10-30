@@ -217,32 +217,47 @@ impl EditorState {
 
         let has_world_update = self.script_runtime.has_world_update();
         let has_object_update = self.script_runtime.has_object_update();
-        let mut objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
         let mut world_changed_scene = false;
-        if has_world_update {
-            match self.script_runtime.call_world_update(delta_time, &self.input, &objects) {
-                Ok(cmds) => {
-                    world_changed_scene = !cmds.is_empty();
-                    self.apply_commands(cmds);
+        if has_world_update || has_object_update {
+            // Object snapshots own all custom properties and textures. Avoid
+            // cloning the scene every frame when no world/object update hook
+            // needs one.
+            let mut objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
+            if has_world_update {
+                match self.script_runtime.call_world_update(delta_time, &self.input, &objects) {
+                    Ok(cmds) => {
+                        world_changed_scene = !cmds.is_empty();
+                        self.apply_commands(cmds);
+                    }
+                    Err(e) => self.push_log(log::Level::Error, format!("_on_update : {e}")),
                 }
-                Err(e) => self.push_log(log::Level::Error, format!("_on_update : {e}")),
             }
-        }
-        if has_object_update {
-            // World commands are applied before object hooks, so refresh only
-            // when they changed the scene. Otherwise reuse this frame snapshot.
-            if world_changed_scene {
-                objects = self.active_scene().objects.values().cloned().collect();
-            }
-            match self.script_runtime.call_object_update(delta_time, &objects, &self.input) {
-                Ok(cmds) => self.apply_commands(cmds),
-                Err(e) => self.push_log(log::Level::Error, format!("Script objet _on_update : {e}")),
+            if has_object_update {
+                // World commands are applied before object hooks, so refresh only
+                // when they changed the scene. Otherwise reuse this frame snapshot.
+                if world_changed_scene {
+                    objects = self.active_scene().objects.values().cloned().collect();
+                }
+                match self.script_runtime.call_object_update(delta_time, &objects, &self.input) {
+                    Ok(cmds) => self.apply_commands(cmds),
+                    Err(e) => self.push_log(log::Level::Error, format!("Script objet _on_update : {e}")),
+                }
             }
         }
         self.update_area_triggers(delta_time);
     }
 
     fn update_area_triggers(&mut self, delta_time: f32) {
+        if !self.script_runtime.has_any_area_hooks() {
+            self.area_overlaps.clear();
+            return;
+        }
+        let has_active_areas = self.active_scene().objects.values()
+            .any(|object| self.script_runtime.object_has_area_hooks(&object.id.to_string()));
+        if !has_active_areas {
+            self.area_overlaps.clear();
+            return;
+        }
         let objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
         let areas = objects.iter()
             .filter(|object| self.script_runtime.object_has_area_hooks(&object.id.to_string()))
@@ -816,6 +831,10 @@ pub struct EditorApp {
     pending_log_copy: bool,
     /// Chemin du projet courant pour la sauvegarde.
     project_path: Option<std::path::PathBuf>,
+    /// Instantané sérialisé du dernier projet enregistré (None = jamais enregistré).
+    saved_project_snapshot: Option<String>,
+    show_close_confirmation: bool,
+    exit_requested: bool,
     /// Le player charge un projet directement en lecture et masque l'UI d'édition.
     player_mode: bool,
     export_receiver: Option<Receiver<Result<std::path::PathBuf, String>>>,
@@ -826,7 +845,10 @@ pub struct EditorApp {
 #[serde(default)]
 struct EditorSettings {
     hide_grid_during_play: bool,
+    confirm_before_exit: bool,
     recent_projects: Vec<String>,
+    recent_textures: Vec<String>,
+    recent_scripts: Vec<String>,
     grid_color: [u8; 4],
 }
 
@@ -834,7 +856,10 @@ impl Default for EditorSettings {
     fn default() -> Self {
         Self {
             hide_grid_during_play: false,
+            confirm_before_exit: true,
             recent_projects: Vec::new(),
+            recent_textures: Vec::new(),
+            recent_scripts: Vec::new(),
             grid_color: [180, 200, 220, 80],
         }
     }
@@ -875,6 +900,9 @@ impl EditorApp {
             log_panel_rect: None,
             pending_log_copy: false,
             project_path: None,
+            saved_project_snapshot: None,
+            show_close_confirmation: false,
+            exit_requested: false,
             player_mode: false,
             export_receiver: None,
             export_status: None,
@@ -897,6 +925,33 @@ impl EditorApp {
 
     pub fn is_player_mode(&self) -> bool {
         self.player_mode
+    }
+
+    /// Retourne vrai si la fermeture est autorisée, sinon affiche la confirmation
+    /// lorsque le projet courant diffère de sa dernière sauvegarde.
+    pub fn request_close(&mut self) -> bool {
+        if self.player_mode {
+            return true;
+        }
+        if !self.state.game_loop.is_editor() {
+            self.state.stop();
+        }
+        if !self.editor_settings.confirm_before_exit {
+            return true;
+        }
+        let current_snapshot = canonical_project_snapshot(&self.state.project);
+        let is_dirty = self.saved_project_snapshot.as_ref()
+            .map_or(true, |saved| current_snapshot.as_ref() != Some(saved));
+        if is_dirty {
+            self.show_close_confirmation = true;
+            false
+        } else {
+            true
+        }
+    }
+
+    pub fn take_exit_request(&mut self) -> bool {
+        std::mem::take(&mut self.exit_requested)
     }
 
     pub fn shutdown_player(&mut self) {
@@ -970,7 +1025,7 @@ impl EditorApp {
 
     fn update_player_view(&mut self, ctx: &Context, delta_time: f32) {
         if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.exit_requested = true;
         }
         let camera_pose = self.runtime_camera.and_then(|id| {
             self.state.active_scene().get_object(id)
@@ -1091,6 +1146,10 @@ impl EditorApp {
                     Some(crate::toolbar::EditorTool::Move)
                 } else if input.key_pressed(egui::Key::R) {
                     Some(crate::toolbar::EditorTool::Rotate)
+                } else if input.key_pressed(egui::Key::F) {
+                    Some(crate::toolbar::EditorTool::TilePaint)
+                } else if input.key_pressed(egui::Key::G) {
+                    Some(crate::toolbar::EditorTool::TileErase)
                 } else {
                     None
                 }
@@ -1193,6 +1252,10 @@ impl EditorApp {
             }
         });
 
+        if self.toolbar.quit_requested && self.request_close() {
+            self.exit_requested = true;
+        }
+
         if self.toolbar.export_requested && self.state.game_loop.is_editor() {
             self.export_current_project();
         }
@@ -1226,6 +1289,12 @@ impl EditorApp {
                     ui.label(egui::RichText::new(
                         "La grille reste visible en mode édition et est masquée pendant Lecture et Pause.",
                     ).small().color(egui::Color32::GRAY));
+                    ui.separator();
+                    ui.label(egui::RichText::new("Général").strong());
+                    settings_changed |= ui.checkbox(
+                        &mut self.editor_settings.confirm_before_exit,
+                        "Demander avant de quitter si le projet n'est pas enregistré",
+                    ).changed();
                 });
             if settings_changed {
                 if let Err(error) = self.save_editor_settings() {
@@ -1320,6 +1389,7 @@ impl EditorApp {
             self.scene_view.selected_tiles.clear();
             self.scene_view.selected_objects.clear();
             self.project_path = None;
+            self.saved_project_snapshot = None;
             history_action = true;
         }
         if self.toolbar.open_requested && self.state.game_loop.mode == EngineMode::Editor {
@@ -1487,6 +1557,16 @@ impl EditorApp {
             .and_then(|path| path.canonicalize().ok());
         let active_project_file = self.project_path.as_deref()
             .and_then(|path| path.canonicalize().ok());
+        let recent_asset_root = self.project_path.as_deref()
+            .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        let recent_textures: Vec<String> = self.editor_settings.recent_textures.iter()
+            .filter(|path| recent_asset_exists(&recent_asset_root, path, &["png", "jpg", "jpeg", "gif"]))
+            .cloned().collect();
+        let recent_scripts: Vec<String> = self.editor_settings.recent_scripts.iter()
+            .filter(|path| recent_asset_exists(&recent_asset_root, path, &["py"]))
+            .cloned().collect();
         let scene_names: Vec<String> = self.state.project.world.scenes.iter()
             .map(|scene| scene.meta.name.clone()).collect();
         let mut tile_texture_picker = None;
@@ -1679,6 +1759,8 @@ impl EditorApp {
                             type_id,
                             &mut self.state.project.object_types,
                             &scene_names,
+                            &recent_textures,
+                            &recent_scripts,
                             &mut request_texture_picker,
                             &mut request_script_picker,
                         );
@@ -1693,6 +1775,8 @@ impl EditorApp {
                             self.scene_view.selected_objects.len(),
                             &self.state.project.object_types,
                             &scene_names,
+                            &recent_textures,
+                            &recent_scripts,
                             &mut request_texture_picker,
                             &mut request_script_picker,
                             &mut request_script_create,
@@ -1730,6 +1814,7 @@ impl EditorApp {
             match choose_texture_file() {
                 Ok(Some(path)) => match self.import_texture(&path) {
                     Ok(stored_path) => {
+                        self.remember_recent_asset(&stored_path, true);
                         if let Some(definition) = self.state.project.object_types.iter_mut()
                             .find(|definition| definition.id == type_id) {
                             definition.defaults.texture = Some(stored_path);
@@ -1748,6 +1833,7 @@ impl EditorApp {
             match choose_script_file() {
                 Ok(Some(path)) => match self.import_object_script(&path) {
                     Ok(stored_path) => {
+                        self.remember_recent_asset(&stored_path, false);
                         if let Some(definition) = self.state.project.object_types.iter_mut()
                             .find(|definition| definition.id == type_id) {
                             definition.defaults.script = Some(stored_path);
@@ -1766,6 +1852,7 @@ impl EditorApp {
             match choose_texture_file() {
                 Ok(Some(path)) => match self.import_texture(&path) {
                     Ok(project_relative_path) => {
+                        self.remember_recent_asset(&project_relative_path, true);
                         if let Some(object) = self.state.active_scene_mut().get_object_mut(object_id) {
                             object.properties.insert(
                                 "texture".to_owned(),
@@ -1791,6 +1878,7 @@ impl EditorApp {
             match choose_script_file() {
                 Ok(Some(path)) => match self.import_object_script(&path) {
                     Ok(stored_path) => {
+                        self.remember_recent_asset(&stored_path, false);
                         if let Some(object) = self.state.active_scene_mut().get_object_mut(object_id) {
                             object.script = Some(stored_path);
                         }
@@ -1807,6 +1895,7 @@ impl EditorApp {
             match choose_new_script_file("object.py") {
                 Ok(Some(path)) => match self.create_object_script(&path) {
                     Ok(stored_path) => {
+                        self.remember_recent_asset(&stored_path, false);
                         if let Some(object) = self.state.active_scene_mut().get_object_mut(object_id) {
                             object.script = Some(stored_path);
                         }
@@ -2092,6 +2181,52 @@ impl EditorApp {
                 }
             }
         }
+
+        let mut close_without_saving = false;
+        let mut cancel_close = false;
+        let mut save_and_close = false;
+        if self.show_close_confirmation {
+            egui::Window::new("Modifications non enregistrées")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                        cancel_close = true;
+                    }
+                    ui.label("Le projet a été modifié depuis sa dernière sauvegarde.");
+                    ui.horizontal(|ui| {
+                        if ui.button("Sauvegarder et quitter").clicked() { save_and_close = true; }
+                        if ui.button("Quitter sans sauvegarder").clicked() { close_without_saving = true; }
+                        if ui.button("Annuler").clicked() { cancel_close = true; }
+                    });
+                });
+        }
+        if cancel_close {
+            self.show_close_confirmation = false;
+        } else if close_without_saving {
+            self.show_close_confirmation = false;
+            self.exit_requested = true;
+        } else if save_and_close {
+            let save_result = if let Some(path) = self.project_path.clone() {
+                self.save_scene(&path).map(Some).map_err(|error| error.to_string())
+            } else {
+                match choose_project_file(true) {
+                    Ok(Some(path)) => self.save_scene(&path).map(Some).map_err(|error| error.to_string()),
+                    Ok(None) => Ok(None),
+                    Err(error) => Err(error.to_string()),
+                }
+            };
+            match save_result {
+                Ok(Some(())) => {
+                    self.show_close_confirmation = false;
+                    self.exit_requested = true;
+                }
+                Ok(None) => {}
+                Err(error) => self.state.push_log(log::Level::Error,
+                    format!("Sauvegarde avant fermeture : {error}")),
+            }
+        }
         if !editing_enabled {
             self.scene_view.camera = editor_camera;
         }
@@ -2271,6 +2406,7 @@ impl EditorApp {
         std::fs::write(&path, &json)?;
         write_tile_definition_files(&path, &self.state.project.tile_definitions)?;
         self.project_path = Some(path.clone());
+        self.saved_project_snapshot = canonical_project_snapshot(&self.state.project);
         self.remember_recent_project(&path);
         self.state.push_log(log::Level::Info, format!("Projet sauvegardé : {}", path.display()));
         Ok(())
@@ -2639,6 +2775,7 @@ impl EditorApp {
         self.state.undo_history.clear();
         self.state.redo_history.clear();
         self.project_path = Some(path.to_owned());
+        self.saved_project_snapshot = canonical_project_snapshot(&self.state.project);
         if !self.player_mode {
             self.remember_recent_project(path);
         }
@@ -2662,6 +2799,21 @@ impl EditorApp {
         if let Err(error) = self.save_editor_settings() {
             self.state.push_log(log::Level::Warn,
                 format!("Enregistrement des projets récents : {error}"));
+        }
+    }
+
+    fn remember_recent_asset(&mut self, path: &str, is_texture: bool) {
+        let recent = if is_texture {
+            &mut self.editor_settings.recent_textures
+        } else {
+            &mut self.editor_settings.recent_scripts
+        };
+        recent.retain(|existing| existing != path);
+        recent.insert(0, path.to_owned());
+        recent.truncate(12);
+        if let Err(error) = self.save_editor_settings() {
+            self.state.push_log(log::Level::Warn,
+                format!("Enregistrement des assets récents : {error}"));
         }
     }
 
@@ -2713,6 +2865,18 @@ impl EditorApp {
             anyhow::bail!("Impossible de charger les scripts d'objet : {}", errors.join("; "))
         }
     }
+}
+
+fn canonical_project_snapshot(project: &Project) -> Option<String> {
+    let value = serde_json::to_value(project).ok()?;
+    serde_json::to_string(&value).ok()
+}
+
+fn recent_asset_exists(root: &std::path::Path, stored_path: &str, extensions: &[&str]) -> bool {
+    let stored = std::path::Path::new(stored_path);
+    let extension_matches = stored.extension().and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extensions.iter().any(|allowed| extension.eq_ignore_ascii_case(allowed)));
+    extension_matches && if stored.is_absolute() { stored.is_file() } else { root.join(stored).is_file() }
 }
 
 fn with_project_extension(path: &std::path::Path) -> std::path::PathBuf {

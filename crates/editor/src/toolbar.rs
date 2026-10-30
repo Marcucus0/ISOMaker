@@ -173,6 +173,7 @@ pub struct Toolbar {
     pub open_requested: bool,
     pub save_requested: bool,
     pub save_as_requested: bool,
+    pub quit_requested: bool,
     pub export_requested: bool,
     pub scene_switch_requested: Option<usize>,
     pub new_scene_requested: bool,
@@ -193,6 +194,7 @@ impl Default for Toolbar {
             open_requested: false,
             save_requested: false,
             save_as_requested: false,
+            quit_requested: false,
             export_requested: false,
             scene_switch_requested: None,
             new_scene_requested: false,
@@ -224,6 +226,7 @@ impl Toolbar {
         self.open_requested = false;
         self.save_requested = false;
         self.save_as_requested = false;
+        self.quit_requested = false;
         self.export_requested = false;
         self.scene_switch_requested = None;
         self.new_scene_requested = false;
@@ -280,7 +283,10 @@ impl Toolbar {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Quitter").clicked()        { std::process::exit(0); }
+                if ui.button("Quitter").clicked() {
+                    self.quit_requested = true;
+                    ui.close_menu();
+                }
             });
 
             ui.add_enabled_ui(editor_enabled, |ui| ui.menu_button("Monde", |ui| {

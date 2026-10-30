@@ -35,3 +35,12 @@ Vérification effectuée pour la release 0.2.0 le 30 octobre 2026 :
 - `cargo build --release -p editor` : réussi.
 - `cargo test --workspace` dans `target/release-check` : 29 tests réussis.
 - `python -m unittest discover -s python/tests -v` : 5 tests réussis.
+
+Vérification effectuée pour la release 0.3.0 le 30 octobre 2026 :
+
+- Documentation contrôlée : `ARCHITECTURE.md`, `PROGRESSION.md`, `PYTHON_API.md` et README.
+- Paramètres VS Code et snippets contrôlés ; les deux fichiers JSON sont valides.
+- `cargo check --workspace` : réussi sans avertissement.
+- `cargo build --release -p editor` : réussi.
+- `cargo test --workspace` dans `target/release-check` : 29 tests réussis.
+- `python -m unittest discover -s python/tests -v` : 5 tests réussis.

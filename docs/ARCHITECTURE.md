@@ -40,17 +40,25 @@ encore un moteur de rendu de jeu complet.
 Le dessin de la vue prépare un index des définitions de tuiles pour le frame,
 afin de faire les recherches par identifiant en temps constant au lieu de
 parcourir la palette pour chaque tuile visible. Les objets temporairement
-déplacés sont également indexés par identifiant pendant le dessin. Les hooks
-Python sont repérés au chargement : les callbacks absents sont ignorés sans
-appel Python par frame. Les instantanés de scène ne sont copiés qu'en présence
-de callbacks concernés et sont réutilisés entre les hooks si le hook monde n'a
-pas émis de commande.
+déplacés sont également indexés par identifiant pendant le dessin. Les formes de
+tuiles, contours, surbrillances et grille sont regroupées dans des meshes egui ;
+les tuiles texturées sont regroupées par texture. Cela évite de créer et
+tesseller une forme egui distincte pour chaque losange et chaque segment de
+grille. Les hooks Python sont repérés au chargement : les callbacks absents sont
+ignorés sans appel Python par frame. Les instantanés de scène ne sont copiés
+qu'en présence de callbacks concernés et sont réutilisés entre les hooks si le
+hook monde n'a pas émis de commande.
 
-Les principaux points à mesurer avant d'aller plus loin sont le tri de tous les
-objets à chaque frame, la création de formes egui pour chaque ligne de grille et
-les copies d'instantanés nécessaires aux scripts Python. Une mise en cache
-persistante ou un changement du rendu doit être guidé par un profilage, car la
-scène reste modifiable par de nombreux outils et callbacks.
+Pendant Lecture, le moteur ne construit pas d'instantané de la scène pour les
+mises à jour monde/objet si aucun de ces hooks n'est chargé. La recherche des
+chevauchements de zones et leurs instantanés sont également évités quand aucun
+script ne déclare de callback de zone.
+
+Les coûts qui restent à mesurer sur des projets représentatifs sont le tri de
+tous les objets à chaque frame, les instantanés nécessaires aux scripts Python
+et le calcul des événements de zones. La mise en cache persistante ou le
+changement de modèle de rendu doit être guidé par ces mesures, car la scène
+reste modifiable par les outils et callbacks.
 
 ## Modèle de projet et persistance
 
@@ -94,6 +102,11 @@ l'ensemble du projet (monde et scènes), pas uniquement la scène affichée.
 L'ouverture et l'enregistrement utilisent les dialogues de fichiers Windows.
 `Ctrl+S` enregistre le fichier courant ou ouvre « Enregistrer sous » lors du
 premier enregistrement.
+À la fermeture via la croix ou **Fichier → Quitter**, l'état sérialisé du projet
+est comparé à son dernier enregistrement. Si des changements restent à sauver,
+l'utilisateur peut sauvegarder et quitter, quitter sans sauvegarder ou annuler.
+Cette confirmation est activée par défaut et peut être désactivée dans les
+paramètres de l'éditeur.
 
 Les textures sont copiées dans un dossier propre au projet, voisin du fichier :
 
@@ -120,6 +133,12 @@ Windows par défaut. Les menus contextuels permettent de créer des fichiers et
 dossiers ainsi que de renommer les éléments. Un renommage met à jour les
 chemins de texture des objets et des tuiles, la propriété `texture` des objets,
 les scripts d'objets et le script du monde, puis sauvegarde le projet.
+
+Dans l'inspecteur, les champs texture et script proposent séparément jusqu'à
+douze derniers fichiers utilisés. Les textures sont filtrées aux formats PNG,
+JPEG et GIF ; les scripts aux fichiers `.py`. Les chemins récents sont
+sauvegardés dans les préférences de l'éditeur et seules les références existantes
+sont affichées. Le bouton adjacent conserve le sélecteur de fichiers Windows.
 
 Le script Python du monde suit le même principe de portabilité : la fenêtre
 **Monde → Script du monde** copie le fichier choisi dans le dossier
@@ -159,7 +178,8 @@ contrôle dédié dans l'UI.
 ## Interactions de l'éditeur
 
 - **Peindre / Gomme** : applique ou efface des tuiles sous le pointeur, y
-  compris pendant un glisser.
+  compris pendant un glisser. Les raccourcis `F` et `G` activent respectivement
+  Peindre et Gomme quand l'éditeur est actif et qu'aucun champ texte n'a le focus.
 - **Sélection** : sélectionne une tuile ou une zone logique. `Shift` sélectionne
   les objets compris dans le rectangle sans sélectionner ni teinter les tuiles.
   Les objets sélectionnés peuvent être copiés avec `Ctrl+C` et collés sous le
@@ -179,8 +199,8 @@ contrôle dédié dans l'UI.
 - **Suppression** : la suppression d'objets avec `Delete` ou le bouton de la
   liste de scène demande confirmation. Supprimer une zone contenant des objets
   demande confirmation avant de supprimer aussi ses tuiles. `Entrée` confirme et
-  `Échap` annule. `Ctrl+D` désélectionne. `S`, `D` et `R` activent Sélection,
-  Déplacer et Rotation.
+  `Échap` annule. `Ctrl+D` désélectionne. `S`, `D`, `R`, `F` et `G` activent
+  Sélection, Déplacer, Rotation, Peindre et Gomme.
 - **Annuler / Rétablir** : s'appuie sur des instantanés de scène en mémoire.
   `Ctrl+Z` annule et `Ctrl+Y` rétablit la dernière modification.
 - **Simulation** : `F9` lance ou reprend Lecture, `F10` arrête, `F11` met en
@@ -242,7 +262,7 @@ En modes Lecture et Pause, l'éditeur est en lecture seule : les outils, les
 panneaux de modification, l'annulation/rétablissement et les raccourcis d'édition
 sont désactivés. Les événements clavier ne déclenchent plus les raccourcis
 Sélection/Déplacer/Rotation, `Ctrl+D` ou `Delete`. La vue de scène reste visible
-et le zoom à la molette reste disponible.
+et la molette est désactivée dans le viewport.
 
 ## Objets et textures
 

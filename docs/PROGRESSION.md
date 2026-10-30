@@ -37,13 +37,20 @@ complet prêt au déploiement.
   Windows associée, de créer des fichiers/dossiers et de renommer les éléments.
   Les renommages actualisent les références aux textures et scripts dans le
   projet, puis le sauvegardent.
+- **Fermeture** : compare le projet à son dernier enregistrement depuis la
+  croix de la fenêtre ou **Fichier → Quitter**. En cas de changements, propose
+  Sauvegarder et quitter, Quitter sans sauvegarder ou Annuler. La confirmation
+  peut être désactivée dans les paramètres de l'éditeur.
+- **Références d'assets dans l'inspecteur** : les champs texture et script
+  proposent les derniers fichiers utilisés du type correspondant ; les listes
+  sont distinctes et le sélecteur Windows reste disponible.
 - **Vue isométrique** : grille par défaut de 64 × 32 pixels par tuile,
   coordonnées logiques, caméra avec zoom centré sous le curseur, déplacement et
   affichage allégé à faible zoom. Un compteur FPS lissé s'affiche dans le
   viewport pendant Lecture.
 - **Outils de tuiles** : peinture, gomme, sélection, déplacement, rotation,
   remplissage de zones contiguës ou de la sélection, annulation et
-  rétablissement. En Lecture et en
+  rétablissement. `F` active Peindre et `G` active Gomme. En Lecture et en
   Pause, les commandes d'édition sont bloquées pour laisser le clavier au jeu.
 - **Tuiles personnalisées** : chaque projet démarre avec les six terrains
   historiques et peut ajouter ses propres tuiles. Leur nom, couleur, texture
@@ -76,7 +83,8 @@ complet prêt au déploiement.
   caméra principale. Leur inspecteur propose un réglage pour activer le lissage
   et un curseur de vitesse. En Lecture et Pause, le viewport peut suivre une
   caméra choisie avec interpolation fluide de position et de zoom, ou afficher
-  la vue libre de l'éditeur.
+  la vue libre de l'éditeur. La molette du viewport est désactivée en Lecture
+  et Pause.
 - **Paramètres de l'éditeur** : le menu **Fichier** ouvre les préférences
   globales sauvegardées dans le dossier de configuration utilisateur. La
   grille peut être masquée pendant Lecture et Pause, et sa couleur est
@@ -142,11 +150,14 @@ complet prêt au déploiement.
 
 ### Limites connues et travail restant
 
-- **Optimisations de rendu et de scripts** : les recherches de palette et
-  d'objets déplacés sont indexées pendant le dessin. Les callbacks Python
-  absents sont ignorés et les instantanés sont réutilisés quand les commandes
-  du monde ne changent pas la scène. Le tri complet des objets et la production
-  des formes de grille restent à profiler avant une optimisation structurelle.
+- **Optimisations de rendu et de scripts** : les meshes des tuiles, textures,
+  contours et grille sont regroupés par lot pour limiter les formes egui
+  construites à chaque frame. Les recherches de palette et d'objets déplacés
+  sont indexées pendant le dessin. Les callbacks Python absents sont ignorés et
+  les instantanés sont réutilisés quand les commandes du monde ne changent pas
+  la scène. Il reste à profiler le tri complet des objets, les instantanés
+  Python et les événements de zones sur de grandes scènes. Les snapshots et la
+  détection de zones sont maintenant omis lorsqu'aucun hook concerné n'est chargé.
 
 - Le placement par glisser-déposer et les scripts ou textures par défaut partagés
   par un type restent à ajouter si nécessaire.
