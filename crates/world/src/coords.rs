@@ -64,7 +64,10 @@ impl Default for IsoProjection {
 
 impl IsoProjection {
     pub fn new(tile_width: f32, tile_height: f32) -> Self {
-        Self { tile_width, tile_height }
+        Self {
+            tile_width,
+            tile_height,
+        }
     }
 
     /// Projette une position logique en position écran relative à l'origine (0, 0).
@@ -146,8 +149,11 @@ mod tests {
     #[test]
     fn elevation_offsets_y() {
         let proj = IsoProjection::default();
-        let base  = proj.tile_to_screen(TilePos::with_z(2, 2, 0));
+        let base = proj.tile_to_screen(TilePos::with_z(2, 2, 0));
         let raised = proj.tile_to_screen(TilePos::with_z(2, 2, 1));
-        assert!(raised.y < base.y, "L'élévation doit déplacer vers le haut (y négatif)");
+        assert!(
+            raised.y < base.y,
+            "L'élévation doit déplacer vers le haut (y négatif)"
+        );
     }
 }

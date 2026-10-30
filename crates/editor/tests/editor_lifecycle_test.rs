@@ -1,15 +1,29 @@
 use editor::EditorApp;
 use editor::EditorState;
 use engine::game_loop::EngineMode;
-use std::{fs, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
-use world::{coords::TilePos, object::{ObjectType, Rotation4}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
+use world::{
+    coords::TilePos,
+    object::{ObjectType, Rotation4},
+};
 
 struct TemporaryScript(PathBuf);
 
 impl TemporaryScript {
     fn new(source: &str) -> Self {
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("isomaker_editor_script_{}_{}.py", std::process::id(), nonce));
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "isomaker_editor_script_{}_{}.py",
+            std::process::id(),
+            nonce
+        ));
         fs::write(&path, source).expect("write temporary Python script");
         Self(path)
     }
@@ -35,17 +49,25 @@ fn test_editor_full_lifecycle() {
         world::object::ObjectType::Building,
         TilePos::new(10, 10),
     );
-    assert_eq!(app.state.active_scene().objects.len(), initial_objects_count + 1);
+    assert_eq!(
+        app.state.active_scene().objects.len(),
+        initial_objects_count + 1
+    );
 
     // 3. Sauvegarde de la scène
     let temp_save_path = std::env::temp_dir().join("test_scene_save.isomaker");
-    app.save_scene(&temp_save_path).expect("La sauvegarde doit réussir");
-    assert!(temp_save_path.exists(), "Le fichier sauvegardé doit exister");
+    app.save_scene(&temp_save_path)
+        .expect("La sauvegarde doit réussir");
+    assert!(
+        temp_save_path.exists(),
+        "Le fichier sauvegardé doit exister"
+    );
 
     // 4. Chargement d'un script Python réel
     let script_path = Path::new("../../python/game_scripts/main.py");
     if script_path.exists() {
-        app.load_script(script_path).expect("Le chargement du script doit réussir");
+        app.load_script(script_path)
+            .expect("Le chargement du script doit réussir");
     }
 
     // 5. Lancement de la simulation (Play)
@@ -83,8 +105,12 @@ fn test_editor_full_lifecycle() {
     );
 
     // 8. Rechargement de la scène sauvegardée
-    app.load_scene(&temp_save_path).expect("Le rechargement doit réussir");
-    assert_eq!(app.state.active_scene().objects.len(), initial_objects_count + 1);
+    app.load_scene(&temp_save_path)
+        .expect("Le rechargement doit réussir");
+    assert_eq!(
+        app.state.active_scene().objects.len(),
+        initial_objects_count + 1
+    );
 
     // Nettoyage
     let _ = std::fs::remove_file(temp_save_path);
@@ -93,18 +119,24 @@ fn test_editor_full_lifecycle() {
 #[test]
 fn object_launch_runs_again_after_toolbar_stop_transition() {
     let mut state = EditorState::new();
-    let object_id = state.active_scene_mut().spawn(
-        "Original",
-        ObjectType::Character,
-        TilePos::with_z(3, 4, 2),
-    );
-    state.active_scene_mut().get_object_mut(object_id).unwrap().hidden = true;
+    let object_id =
+        state
+            .active_scene_mut()
+            .spawn("Original", ObjectType::Character, TilePos::with_z(3, 4, 2));
+    state
+        .active_scene_mut()
+        .get_object_mut(object_id)
+        .unwrap()
+        .hidden = true;
     let object_id_text = object_id.to_string();
     let script = TemporaryScript::new(
         "def _on_game_launch(game):\n    game.set_self_property('hidden', False)\n    game.set_self_property('has_collisions', False)\n    game.set_self_property('fit_texture_to_diamond', True)\n    game.set_self_property('name', 'Launched')\n    game.set_self_property('x', 5)\n    game.set_self_property('y', 6)\n    game.set_self_property('z', 8)\n    game.set_self_property('rotation', 'East')\n    game.set_self_property('layer', 'Foreground')\n    game.set_self_property('texture', 'assets/character.png')\n    game.set_self_property('script', 'scripts/next.py')\n    game.set_self_property('score', 42)\n    game.set_self_property('footprint_width', 2)\n    game.log('object launch regression marker')\n",
     );
 
-    state.script_runtime.load_object_script(&script.0, object_id_text.clone()).unwrap();
+    state
+        .script_runtime
+        .load_object_script(&script.0, object_id_text.clone())
+        .unwrap();
     state.play();
     {
         let object = state.active_scene().get_object(object_id).unwrap();
@@ -129,16 +161,26 @@ fn object_launch_runs_again_after_toolbar_stop_transition() {
     assert_eq!(restored.name, "Original");
     assert_eq!(restored.tile_pos, TilePos::with_z(3, 4, 2));
 
-    state.script_runtime.load_object_script(&script.0, object_id_text).unwrap();
+    state
+        .script_runtime
+        .load_object_script(&script.0, object_id_text)
+        .unwrap();
     state.play();
     let relaunched = state.active_scene().get_object(object_id).unwrap();
-    assert!(!relaunched.hidden, "_on_game_launch doit se relancer après Stop");
+    assert!(
+        !relaunched.hidden,
+        "_on_game_launch doit se relancer après Stop"
+    );
     assert_eq!(relaunched.name, "Launched");
-    let launch_log_count: usize = state.log_messages.iter()
+    let launch_log_count: usize = state
+        .log_messages
+        .iter()
         .filter(|entry| entry.message.ends_with("object launch regression marker"))
         .map(|entry| entry.repetitions)
         .sum();
-    assert_eq!(launch_log_count, 2, "le hook de lancement doit journaliser à chaque démarrage");
+    assert_eq!(
+        launch_log_count, 2,
+        "le hook de lancement doit journaliser à chaque démarrage"
+    );
     state.stop();
 }
-

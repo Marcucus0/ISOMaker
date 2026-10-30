@@ -1,7 +1,7 @@
 //! Handles typés pour les ressources.
 
-use uuid::Uuid;
 use std::marker::PhantomData;
+use uuid::Uuid;
 
 /// Identifiant unique d'une ressource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -14,7 +14,9 @@ impl AssetId {
 }
 
 impl Default for AssetId {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Handle typé vers une ressource dans le registre.
@@ -27,7 +29,10 @@ pub struct Handle<T> {
 
 impl<T> Handle<T> {
     pub fn new(id: AssetId) -> Self {
-        Self { id, _phantom: PhantomData }
+        Self {
+            id,
+            _phantom: PhantomData,
+        }
     }
 
     pub fn new_unique() -> Self {

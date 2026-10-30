@@ -18,9 +18,8 @@ use editor::EditorApp;
 
 fn main() {
     // Initialise le logger (affiche dans la console).
-    let mut logger = env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    );
+    let mut logger =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
     // Keep engine info logs while hiding wgpu's per-frame submission waits.
     logger.filter_module("wgpu_core::device::resource", log::LevelFilter::Warn);
     logger.init();
@@ -30,16 +29,23 @@ fn main() {
     let is_player = env!("CARGO_BIN_NAME") == "player";
     let initial_editor = if is_player {
         prepare_bundled_python();
-        let project_path = std::env::args_os().nth(1).map(std::path::PathBuf::from)
+        let project_path = std::env::args_os()
+            .nth(1)
+            .map(std::path::PathBuf::from)
             .or_else(find_project_next_to_executable);
         let Some(project_path) = project_path else {
-            report_startup_error("Impossible de trouver le projet à ouvrir. Passez le chemin .isomaker en argument.");
+            report_startup_error(
+                "Impossible de trouver le projet à ouvrir. Passez le chemin .isomaker en argument.",
+            );
             return;
         };
         match EditorApp::new_player(&project_path) {
             Ok(editor) => Some(editor),
             Err(error) => {
-                report_startup_error(&format!("Impossible de lancer le jeu depuis {} : {error}", project_path.display()));
+                report_startup_error(&format!(
+                    "Impossible de lancer le jeu depuis {} : {error}",
+                    project_path.display()
+                ));
                 return;
             }
         }
@@ -50,22 +56,33 @@ fn main() {
     let event_loop = EventLoop::new().expect("Impossible de créer l'event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = App::Uninitialized { is_player, editor: initial_editor };
-    event_loop.run_app(&mut app).expect("Erreur de boucle d'événements");
+    let mut app = App::Uninitialized {
+        is_player,
+        editor: initial_editor,
+    };
+    event_loop
+        .run_app(&mut app)
+        .expect("Erreur de boucle d'événements");
 }
 
 #[cfg(windows)]
 fn report_startup_error(message: &str) {
     use std::{ffi::c_void, os::windows::ffi::OsStrExt};
     let title: Vec<u16> = std::ffi::OsStr::new("ISOMaker — erreur de lancement")
-        .encode_wide().chain(std::iter::once(0)).collect();
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     let text: Vec<u16> = std::ffi::OsStr::new(message)
-        .encode_wide().chain(std::iter::once(0)).collect();
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     #[link(name = "user32")]
     unsafe extern "system" {
         fn MessageBoxW(window: *mut c_void, text: *const u16, title: *const u16, kind: u32) -> i32;
     }
-    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x10); }
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x10);
+    }
 }
 
 #[cfg(not(windows))]
@@ -79,20 +96,30 @@ fn find_project_next_to_executable() -> Option<std::path::PathBuf> {
     if default.is_file() {
         return Some(default);
     }
-    let mut projects = std::fs::read_dir(directory).ok()?
+    let mut projects = std::fs::read_dir(directory)
+        .ok()?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("isomaker")));
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("isomaker"))
+        });
     let project = projects.next()?;
     projects.next().is_none().then_some(project)
 }
 
 fn prepare_bundled_python() {
-    let Some(home) = std::env::current_exe().ok()
-        .and_then(|executable| executable.parent().map(|directory| directory.join("python-runtime")))
-        .filter(|home| home.join("Lib").is_dir()) else {
-            return;
-        };
+    let Some(home) = std::env::current_exe()
+        .ok()
+        .and_then(|executable| {
+            executable
+                .parent()
+                .map(|directory| directory.join("python-runtime"))
+        })
+        .filter(|home| home.join("Lib").is_dir())
+    else {
+        return;
+    };
     std::env::set_var("PYTHONHOME", &home);
     let mut paths = vec![home.clone(), home.join("DLLs")];
     if let Some(existing) = std::env::var_os("PATH") {
@@ -106,7 +133,10 @@ fn prepare_bundled_python() {
 // ── États de l'application ────────────────────────────────────────────────────
 
 enum App {
-    Uninitialized { is_player: bool, editor: Option<EditorApp> },
+    Uninitialized {
+        is_player: bool,
+        editor: Option<EditorApp>,
+    },
     Running(RunningApp),
 }
 
@@ -133,15 +163,27 @@ impl ApplicationHandler for App {
         if matches!(self, App::Running(_)) {
             return; // Déjà initialisé.
         }
-        let is_player = matches!(self, App::Uninitialized { is_player: true, .. });
+        let is_player = matches!(
+            self,
+            App::Uninitialized {
+                is_player: true,
+                ..
+            }
+        );
 
         // ── Fenêtre ────────────────────────────────────────────────────────────
-        let title = if is_player { "ISOMaker — Jeu" } else { "Moteur de jeu 2D isométrique — Éditeur" };
+        let title = if is_player {
+            "ISOMaker — Jeu"
+        } else {
+            "Moteur de jeu 2D isométrique — Éditeur"
+        };
         let attrs = Window::default_attributes()
             .with_title(title)
             .with_inner_size(winit::dpi::LogicalSize::new(1400u32, 900u32));
         let window = Arc::new(
-            event_loop.create_window(attrs).expect("Impossible de créer la fenêtre"),
+            event_loop
+                .create_window(attrs)
+                .expect("Impossible de créer la fenêtre"),
         );
 
         // ── wgpu ──────────────────────────────────────────────────────────────
@@ -176,13 +218,7 @@ impl ApplicationHandler for App {
             None,
         );
 
-        let egui_renderer = egui_wgpu::Renderer::new(
-            &device,
-            surface_format,
-            None,
-            1,
-            false,
-        );
+        let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, None, 1, false);
 
         // ── Éditeur ───────────────────────────────────────────────────────────
         let editor = match self {
@@ -190,8 +226,11 @@ impl ApplicationHandler for App {
             App::Running(_) => unreachable!(),
         };
 
-        log::info!("Éditeur initialisé. Fenêtre {}×{}.",
-            window.inner_size().width, window.inner_size().height);
+        log::info!(
+            "Éditeur initialisé. Fenêtre {}×{}.",
+            window.inner_size().width,
+            window.inner_size().height
+        );
 
         *self = App::Running(RunningApp {
             window,
@@ -222,7 +261,10 @@ impl ApplicationHandler for App {
 
         // Intercepte les raccourcis d'édition avant leur traitement par egui-winit.
         if app.ctrl_down && !app.egui_ctx.wants_keyboard_input() {
-            if let WindowEvent::KeyboardInput { event: key_event, .. } = &event {
+            if let WindowEvent::KeyboardInput {
+                event: key_event, ..
+            } = &event
+            {
                 if key_event.state == ElementState::Pressed && !key_event.repeat {
                     let shortcut = match key_event.physical_key {
                         PhysicalKey::Code(KeyCode::KeyC) => Some(Shortcut::Copy),
@@ -245,20 +287,29 @@ impl ApplicationHandler for App {
 
         // L'entrée jeu est capturée avant que egui puisse consommer un raccourci.
         if let WindowEvent::KeyboardInput { event, .. } = &event {
-            if let Some(key) = map_logical_key(&event.logical_key).or_else(|| match event.physical_key {
-                PhysicalKey::Code(code) => map_key(code),
-                _ => None,
-            }) {
-                    match event.state {
-                        ElementState::Pressed => app.editor.state.input.key_down(key),
-                        ElementState::Released => app.editor.state.input.key_up(key),
-                    }
+            if let Some(key) =
+                map_logical_key(&event.logical_key).or_else(|| match event.physical_key {
+                    PhysicalKey::Code(code) => map_key(code),
+                    _ => None,
+                })
+            {
+                match event.state {
+                    ElementState::Pressed => app.editor.state.input.key_down(key),
+                    ElementState::Released => app.editor.state.input.key_up(key),
+                }
             }
         }
 
         // Transmet l'événement à egui.
         let resp = app.egui_state.on_window_event(&app.window, &event);
-        if resp.consumed && !matches!(event, WindowEvent::RedrawRequested | WindowEvent::CloseRequested) { return; }
+        if resp.consumed
+            && !matches!(
+                event,
+                WindowEvent::RedrawRequested | WindowEvent::CloseRequested
+            )
+        {
+            return;
+        }
 
         match event {
             WindowEvent::CloseRequested => {
@@ -273,7 +324,7 @@ impl ApplicationHandler for App {
 
             WindowEvent::Resized(size) => {
                 if size.width > 0 && size.height > 0 {
-                    app.surface_config.width  = size.width;
+                    app.surface_config.width = size.width;
                     app.surface_config.height = size.height;
                     app.surface.configure(&app.device, &app.surface_config);
                 }
@@ -310,11 +361,15 @@ impl ApplicationHandler for App {
                 // Les événements edge ne valent que pour ce callback de jeu.
                 app.editor.state.input.begin_frame();
 
-                app.egui_state.handle_platform_output(&app.window, full_output.platform_output);
+                app.egui_state
+                    .handle_platform_output(&app.window, full_output.platform_output);
 
-                let tris = app.egui_ctx.tessellate(full_output.shapes, app.egui_ctx.pixels_per_point());
+                let tris = app
+                    .egui_ctx
+                    .tessellate(full_output.shapes, app.egui_ctx.pixels_per_point());
                 for (id, delta) in full_output.textures_delta.set {
-                    app.egui_renderer.update_texture(&app.device, &app.queue, id, &delta);
+                    app.egui_renderer
+                        .update_texture(&app.device, &app.queue, id, &delta);
                 }
                 for id in full_output.textures_delta.free {
                     app.egui_renderer.free_texture(&id);
@@ -325,9 +380,11 @@ impl ApplicationHandler for App {
                     pixels_per_point: app.egui_ctx.pixels_per_point(),
                 };
 
-                let mut encoder = app.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("egui_encoder"),
-                });
+                let mut encoder =
+                    app.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("egui_encoder"),
+                        });
 
                 app.egui_renderer.update_buffers(
                     &app.device,
@@ -345,7 +402,10 @@ impl ApplicationHandler for App {
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.1, g: 0.12, b: 0.15, a: 1.0,
+                                    r: 0.1,
+                                    g: 0.12,
+                                    b: 0.15,
+                                    a: 1.0,
                                 }),
                                 store: wgpu::StoreOp::Store,
                             },
@@ -356,7 +416,8 @@ impl ApplicationHandler for App {
                     });
 
                     let mut render_pass = render_pass.forget_lifetime();
-                    app.egui_renderer.render(&mut render_pass, &tris, &screen_desc);
+                    app.egui_renderer
+                        .render(&mut render_pass, &tris, &screen_desc);
                 }
 
                 app.queue.submit(std::iter::once(encoder.finish()));
@@ -392,31 +453,67 @@ enum Shortcut {
 fn map_key(code: KeyCode) -> Option<engine::Key> {
     use engine::Key as K;
     Some(match code {
-        KeyCode::KeyA => K::A, KeyCode::KeyB => K::B, KeyCode::KeyC => K::C,
-        KeyCode::KeyD => K::D, KeyCode::KeyE => K::E, KeyCode::KeyF => K::F,
-        KeyCode::KeyG => K::G, KeyCode::KeyH => K::H, KeyCode::KeyI => K::I,
-        KeyCode::KeyJ => K::J, KeyCode::KeyK => K::K, KeyCode::KeyL => K::L,
-        KeyCode::KeyM => K::M, KeyCode::KeyN => K::N, KeyCode::KeyO => K::O,
-        KeyCode::KeyP => K::P, KeyCode::KeyQ => K::Q, KeyCode::KeyR => K::R,
-        KeyCode::KeyS => K::S, KeyCode::KeyT => K::T, KeyCode::KeyU => K::U,
-        KeyCode::KeyV => K::V, KeyCode::KeyW => K::W, KeyCode::KeyX => K::X,
-        KeyCode::KeyY => K::Y, KeyCode::KeyZ => K::Z,
-        KeyCode::Digit0 => K::Key0, KeyCode::Digit1 => K::Key1, KeyCode::Digit2 => K::Key2,
-        KeyCode::Digit3 => K::Key3, KeyCode::Digit4 => K::Key4, KeyCode::Digit5 => K::Key5,
-        KeyCode::Digit6 => K::Key6, KeyCode::Digit7 => K::Key7, KeyCode::Digit8 => K::Key8,
+        KeyCode::KeyA => K::A,
+        KeyCode::KeyB => K::B,
+        KeyCode::KeyC => K::C,
+        KeyCode::KeyD => K::D,
+        KeyCode::KeyE => K::E,
+        KeyCode::KeyF => K::F,
+        KeyCode::KeyG => K::G,
+        KeyCode::KeyH => K::H,
+        KeyCode::KeyI => K::I,
+        KeyCode::KeyJ => K::J,
+        KeyCode::KeyK => K::K,
+        KeyCode::KeyL => K::L,
+        KeyCode::KeyM => K::M,
+        KeyCode::KeyN => K::N,
+        KeyCode::KeyO => K::O,
+        KeyCode::KeyP => K::P,
+        KeyCode::KeyQ => K::Q,
+        KeyCode::KeyR => K::R,
+        KeyCode::KeyS => K::S,
+        KeyCode::KeyT => K::T,
+        KeyCode::KeyU => K::U,
+        KeyCode::KeyV => K::V,
+        KeyCode::KeyW => K::W,
+        KeyCode::KeyX => K::X,
+        KeyCode::KeyY => K::Y,
+        KeyCode::KeyZ => K::Z,
+        KeyCode::Digit0 => K::Key0,
+        KeyCode::Digit1 => K::Key1,
+        KeyCode::Digit2 => K::Key2,
+        KeyCode::Digit3 => K::Key3,
+        KeyCode::Digit4 => K::Key4,
+        KeyCode::Digit5 => K::Key5,
+        KeyCode::Digit6 => K::Key6,
+        KeyCode::Digit7 => K::Key7,
+        KeyCode::Digit8 => K::Key8,
         KeyCode::Digit9 => K::Key9,
-        KeyCode::Escape => K::Escape, KeyCode::Enter | KeyCode::NumpadEnter => K::Enter,
-        KeyCode::Space => K::Space, KeyCode::Backspace => K::Backspace,
-        KeyCode::Delete => K::Delete, KeyCode::Tab => K::Tab,
-        KeyCode::ArrowLeft => K::Left, KeyCode::ArrowRight => K::Right,
-        KeyCode::ArrowUp => K::Up, KeyCode::ArrowDown => K::Down,
+        KeyCode::Escape => K::Escape,
+        KeyCode::Enter | KeyCode::NumpadEnter => K::Enter,
+        KeyCode::Space => K::Space,
+        KeyCode::Backspace => K::Backspace,
+        KeyCode::Delete => K::Delete,
+        KeyCode::Tab => K::Tab,
+        KeyCode::ArrowLeft => K::Left,
+        KeyCode::ArrowRight => K::Right,
+        KeyCode::ArrowUp => K::Up,
+        KeyCode::ArrowDown => K::Down,
         KeyCode::ShiftLeft | KeyCode::ShiftRight => K::Shift,
         KeyCode::ControlLeft | KeyCode::ControlRight => K::Control,
         KeyCode::AltLeft | KeyCode::AltRight => K::Alt,
-        KeyCode::F1 => K::F1, KeyCode::F2 => K::F2, KeyCode::F3 => K::F3,
-        KeyCode::F4 => K::F4, KeyCode::F5 => K::F5, KeyCode::F6 => K::F6,
-        KeyCode::F7 => K::F7, KeyCode::F8 => K::F8, KeyCode::F9 => K::F9,
-        KeyCode::F10 => K::F10, KeyCode::F11 => K::F11, KeyCode::F12 => K::F12,
+        KeyCode::F1 => K::F1,
+        KeyCode::F2 => K::F2,
+        KeyCode::F3 => K::F3,
+        KeyCode::F4 => K::F4,
+        KeyCode::F5 => K::F5,
+        KeyCode::F6 => K::F6,
+        KeyCode::F7 => K::F7,
+        KeyCode::F8 => K::F8,
+        KeyCode::F9 => K::F9,
+        KeyCode::F10 => K::F10,
+        KeyCode::F11 => K::F11,
+        KeyCode::F12 => K::F12,
         _ => return None,
     })
 }
@@ -424,21 +521,52 @@ fn map_key(code: KeyCode) -> Option<engine::Key> {
 /// Préfère le caractère logique pour que `keys.Z` désigne bien Z sur AZERTY
 /// comme sur QWERTY, même quand Shift transforme le caractère en majuscule.
 fn map_logical_key(key: &winit::keyboard::Key) -> Option<engine::Key> {
-    let winit::keyboard::Key::Character(character) = key else { return None };
+    let winit::keyboard::Key::Character(character) = key else {
+        return None;
+    };
     let mut chars = character.chars();
     let first = chars.next()?.to_ascii_lowercase();
-    if chars.next().is_some() { return None; }
+    if chars.next().is_some() {
+        return None;
+    }
     use engine::Key as K;
     Some(match first {
-        'a' => K::A, 'b' => K::B, 'c' => K::C, 'd' => K::D, 'e' => K::E,
-        'f' => K::F, 'g' => K::G, 'h' => K::H, 'i' => K::I, 'j' => K::J,
-        'k' => K::K, 'l' => K::L, 'm' => K::M, 'n' => K::N, 'o' => K::O,
-        'p' => K::P, 'q' => K::Q, 'r' => K::R, 's' => K::S, 't' => K::T,
-        'u' => K::U, 'v' => K::V, 'w' => K::W, 'x' => K::X, 'y' => K::Y,
+        'a' => K::A,
+        'b' => K::B,
+        'c' => K::C,
+        'd' => K::D,
+        'e' => K::E,
+        'f' => K::F,
+        'g' => K::G,
+        'h' => K::H,
+        'i' => K::I,
+        'j' => K::J,
+        'k' => K::K,
+        'l' => K::L,
+        'm' => K::M,
+        'n' => K::N,
+        'o' => K::O,
+        'p' => K::P,
+        'q' => K::Q,
+        'r' => K::R,
+        's' => K::S,
+        't' => K::T,
+        'u' => K::U,
+        'v' => K::V,
+        'w' => K::W,
+        'x' => K::X,
+        'y' => K::Y,
         'z' => K::Z,
-        '0' => K::Key0, '1' => K::Key1, '2' => K::Key2, '3' => K::Key3,
-        '4' => K::Key4, '5' => K::Key5, '6' => K::Key6, '7' => K::Key7,
-        '8' => K::Key8, '9' => K::Key9,
+        '0' => K::Key0,
+        '1' => K::Key1,
+        '2' => K::Key2,
+        '3' => K::Key3,
+        '4' => K::Key4,
+        '5' => K::Key5,
+        '6' => K::Key6,
+        '7' => K::Key7,
+        '8' => K::Key8,
+        '9' => K::Key9,
         _ => return None,
     })
 }
@@ -449,7 +577,12 @@ async fn init_wgpu(
     instance: &wgpu::Instance,
     surface: &wgpu::Surface<'_>,
     size: winit::dpi::PhysicalSize<u32>,
-) -> (wgpu::Device, wgpu::Queue, wgpu::SurfaceConfiguration, wgpu::TextureFormat) {
+) -> (
+    wgpu::Device,
+    wgpu::Queue,
+    wgpu::SurfaceConfiguration,
+    wgpu::TextureFormat,
+) {
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -492,7 +625,11 @@ async fn init_wgpu(
     };
     surface.configure(&device, &config);
 
-    log::info!("Adaptateur GPU : {} ({:?})", adapter.get_info().name, adapter.get_info().backend);
+    log::info!(
+        "Adaptateur GPU : {} ({:?})",
+        adapter.get_info().name,
+        adapter.get_info().backend
+    );
 
     (device, queue, config, surface_format)
 }

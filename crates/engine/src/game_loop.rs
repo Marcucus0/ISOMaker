@@ -20,9 +20,9 @@ impl Default for EngineMode {
 impl std::fmt::Display for EngineMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EngineMode::Editor  => write!(f, "Éditeur"),
+            EngineMode::Editor => write!(f, "Éditeur"),
             EngineMode::Playing => write!(f, "Lecture"),
-            EngineMode::Paused  => write!(f, "Pause"),
+            EngineMode::Paused => write!(f, "Pause"),
         }
     }
 }

@@ -1,7 +1,7 @@
 //! Grille de tuiles — stockage compact par chunks.
 
-use serde::{Deserialize, Serialize};
 use crate::coords::TilePos;
+use serde::{Deserialize, Serialize};
 
 /// Définition d'un type de tuile propre à un projet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,7 +64,10 @@ pub struct TileData {
 
 impl TileData {
     pub fn empty() -> Self {
-        Self { tile_type: 0, decoration: 0 }
+        Self {
+            tile_type: 0,
+            decoration: 0,
+        }
     }
 
     pub fn is_empty(self) -> bool {
@@ -72,7 +75,10 @@ impl TileData {
     }
 
     pub fn terrain(tile_type: u16) -> Self {
-        Self { tile_type, decoration: 0 }
+        Self {
+            tile_type,
+            decoration: 0,
+        }
     }
 }
 
@@ -181,7 +187,8 @@ impl TileGrid {
 
     pub fn set(&mut self, tile: TilePos, data: TileData) {
         let (cx, cy, lx, ly) = Self::chunk_coords(tile);
-        let chunk = self.chunks
+        let chunk = self
+            .chunks
             .entry((cx, cy))
             .or_insert_with(|| TileChunk::new(cx, cy));
         chunk.set(lx, ly, data);

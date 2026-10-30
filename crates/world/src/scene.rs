@@ -1,12 +1,12 @@
 //! Scène : conteneur principal d'un monde éditable.
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::{
     coords::{IsoProjection, TilePos},
     grid::{TileData, TileGrid},
     object::{ObjectId, ObjectType, SceneObject},
 };
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Métadonnées d'une scène.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +75,8 @@ impl Scene {
     // ── Objets ────────────────────────────────────────────────────────────────
 
     pub fn add_object(&mut self, obj: SceneObject) -> ObjectId {
+        let mut obj = obj;
+        obj.name = self.unique_object_name(&obj.name, None);
         let id = obj.id;
         if obj.object_type == ObjectType::Camera && self.main_camera.is_none() {
             self.main_camera = Some(id);
@@ -83,10 +85,43 @@ impl Scene {
         id
     }
 
+    /// Retourne un nom libre dans la scène, en ignorant éventuellement un objet.
+    /// En cas de doublon, ajoute le premier suffixe numérique disponible.
+    pub fn unique_object_name(&self, requested: &str, except: Option<ObjectId>) -> String {
+        let existing: std::collections::HashSet<&str> = self
+            .objects
+            .values()
+            .filter(|object| Some(object.id) != except)
+            .map(|object| object.name.as_str())
+            .collect();
+
+        if !existing.contains(requested) {
+            return requested.to_owned();
+        }
+
+        let base = requested
+            .rsplit_once(" (")
+            .and_then(|(base, suffix)| {
+                suffix.strip_suffix(')')?.parse::<u32>().ok().map(|_| base)
+            })
+            .unwrap_or(requested);
+
+        let mut number = 1_u32;
+        loop {
+            let candidate = format!("{base} ({number})");
+            if !existing.contains(candidate.as_str()) {
+                return candidate;
+            }
+            number = number.saturating_add(1);
+        }
+    }
+
     pub fn remove_object(&mut self, id: ObjectId) -> Option<SceneObject> {
         let removed = self.objects.remove(&id);
         if self.main_camera == Some(id) {
-            self.main_camera = self.objects.values()
+            self.main_camera = self
+                .objects
+                .values()
                 .find(|object| object.object_type == ObjectType::Camera)
                 .map(|object| object.id);
         }
@@ -117,7 +152,8 @@ impl Scene {
         let mut objects: Vec<&SceneObject> = self.objects.values().collect();
         objects.sort_by(|a, b| {
             // Tri par couche d'abord, puis par profondeur isométrique.
-            a.layer.sort_key()
+            a.layer
+                .sort_key()
                 .cmp(&b.layer.sort_key())
                 .then(a.iso_sort_key().cmp(&b.iso_sort_key()))
         });
@@ -165,11 +201,14 @@ mod tests {
     #[test]
     fn iso_sort_order() {
         let mut scene = Scene::new("Sort");
-        let far  = scene.spawn("far",  ObjectType::Item, TilePos::new(5, 5));
+        let far = scene.spawn("far", ObjectType::Item, TilePos::new(5, 5));
         let near = scene.spawn("near", ObjectType::Item, TilePos::new(0, 0));
         let sorted = scene.objects_sorted_for_render();
         let near_idx = sorted.iter().position(|o| o.id == near).unwrap();
-        let far_idx  = sorted.iter().position(|o| o.id == far).unwrap();
-        assert!(near_idx < far_idx, "L'objet le plus proche doit être affiché en premier");
+        let far_idx = sorted.iter().position(|o| o.id == far).unwrap();
+        assert!(
+            near_idx < far_idx,
+            "L'objet le plus proche doit être affiché en premier"
+        );
     }
 }

@@ -1,12 +1,18 @@
 //! Inspecteur — panneau de propriétés de l'objet sélectionné.
 
+use crate::panels::{
+    custom_property_kind_label, default_custom_property_value, is_valid_property_key,
+    show_custom_property_default,
+};
 use egui::{CollapsingHeader, Grid, Ui};
 use world::{
     layer::Layer,
-    object::{CustomObjectTypeDefinition, CustomPropertyDefinition, CustomPropertyKind, ObjectId, ObjectType, PropValue, Rotation4},
+    object::{
+        CustomObjectTypeDefinition, CustomPropertyDefinition, CustomPropertyKind, ObjectId,
+        ObjectType, PropValue, Rotation4,
+    },
     scene::Scene,
 };
-use crate::panels::{custom_property_kind_label, default_custom_property_value, is_valid_property_key, show_custom_property_default};
 
 #[derive(Debug, Default)]
 pub struct TypeDefinitionEdit {
@@ -45,7 +51,11 @@ impl Inspector {
             } else {
                 "Aucun objet sélectionné".to_owned()
             };
-            ui.label(egui::RichText::new(message).color(egui::Color32::GRAY).italics());
+            ui.label(
+                egui::RichText::new(message)
+                    .color(egui::Color32::GRAY)
+                    .italics(),
+            );
             return false;
         };
 
@@ -143,11 +153,17 @@ impl Inspector {
                             ui.label("Empreinte (tuiles)");
                             ui.horizontal(|ui| {
                                 ui.label("Largeur");
-                                if ui.add(egui::DragValue::new(&mut footprint_width).range(1..=256)).changed() {
+                                if ui
+                                    .add(egui::DragValue::new(&mut footprint_width).range(1..=256))
+                                    .changed()
+                                {
                                     modified = true;
                                 }
                                 ui.label("Hauteur");
-                                if ui.add(egui::DragValue::new(&mut footprint_height).range(1..=256)).changed() {
+                                if ui
+                                    .add(egui::DragValue::new(&mut footprint_height).range(1..=256))
+                                    .changed()
+                                {
                                     modified = true;
                                 }
                             });
@@ -192,9 +208,12 @@ impl Inspector {
                         .spacing([8.0, 4.0])
                         .show(ui, |ui| {
                             ui.label("Zoom");
-                            if ui.add(egui::DragValue::new(&mut camera_zoom)
-                                .speed(0.1)
-                                .range(0.1..=10.0))
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut camera_zoom)
+                                        .speed(0.1)
+                                        .range(0.1..=10.0),
+                                )
                                 .changed()
                             {
                                 modified = true;
@@ -216,8 +235,14 @@ impl Inspector {
 
                             ui.label("Vitesse");
                             ui.add_enabled_ui(camera_interpolation, |ui| {
-                                if ui.add(egui::Slider::new(&mut camera_interpolation_speed, 0.1..=20.0)
-                                    .suffix("×"))
+                                if ui
+                                    .add(
+                                        egui::Slider::new(
+                                            &mut camera_interpolation_speed,
+                                            0.1..=20.0,
+                                        )
+                                        .suffix("×"),
+                                    )
                                     .changed()
                                 {
                                     modified = true;
@@ -245,7 +270,10 @@ impl Inspector {
 
                         if !is_camera {
                             ui.label("Texture dans le losange");
-                            if ui.checkbox(&mut fit_texture_to_diamond, "Ajuster").changed() {
+                            if ui
+                                .checkbox(&mut fit_texture_to_diamond, "Ajuster")
+                                .changed()
+                            {
                                 modified = true;
                             }
                             ui.end_row();
@@ -303,21 +331,21 @@ impl Inspector {
             });
 
         if !is_camera {
-        CollapsingHeader::new("Physique")
-            .id_salt("inspector_physics")
-            .default_open(true)
-            .show(ui, |ui| {
-                Grid::new("inspector_physics_grid")
-                    .num_columns(2)
-                    .spacing([8.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.label("Collisions");
-                        if ui.checkbox(&mut has_collisions, "Activées").changed() {
-                            modified = true;
-                        }
-                        ui.end_row();
-                    });
-            });
+            CollapsingHeader::new("Physique")
+                .id_salt("inspector_physics")
+                .default_open(true)
+                .show(ui, |ui| {
+                    Grid::new("inspector_physics_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Collisions");
+                            if ui.checkbox(&mut has_collisions, "Activées").changed() {
+                                modified = true;
+                            }
+                            ui.end_row();
+                        });
+                });
         }
 
         CollapsingHeader::new("Script")
@@ -335,7 +363,11 @@ impl Inspector {
                     ) {
                         modified = true;
                     }
-                    if ui.small_button("…").on_hover_text("Choisir un script Python").clicked() {
+                    if ui
+                        .small_button("…")
+                        .on_hover_text("Choisir un script Python")
+                        .clicked()
+                    {
                         *request_script_picker = true;
                     }
                     if ui.small_button("Créer…").clicked() {
@@ -344,23 +376,34 @@ impl Inspector {
                 });
             });
 
-        let custom_definition = obj.custom_type_id
-            .and_then(|type_id| custom_object_types.iter().find(|definition| definition.id == type_id));
+        let custom_definition = obj.custom_type_id.and_then(|type_id| {
+            custom_object_types
+                .iter()
+                .find(|definition| definition.id == type_id)
+        });
         let declared_keys: std::collections::HashSet<&str> = custom_definition
-            .into_iter().flat_map(|definition| definition.properties.iter())
-            .map(|property| property.key.as_str()).collect();
-        let mut custom_keys: Vec<_> = props.keys()
+            .into_iter()
+            .flat_map(|definition| definition.properties.iter())
+            .map(|property| property.key.as_str())
+            .collect();
+        let mut custom_keys: Vec<_> = props
+            .keys()
             .filter(|key| key.as_str() != "texture" && !declared_keys.contains(key.as_str()))
-            .cloned().collect();
+            .cloned()
+            .collect();
         custom_keys.sort();
-        let custom_count = custom_keys.len() + custom_definition.map_or(0, |definition| definition.properties.len());
+        let custom_count = custom_keys.len()
+            + custom_definition.map_or(0, |definition| definition.properties.len());
         CollapsingHeader::new(format!("Propriétés personnalisées ({custom_count})"))
             .id_salt("inspector_custom_properties")
             .default_open(true)
             .show(ui, |ui| {
                 if custom_count == 0 {
-                    ui.label(egui::RichText::new("Aucune propriété personnalisée")
-                        .color(egui::Color32::GRAY).italics());
+                    ui.label(
+                        egui::RichText::new("Aucune propriété personnalisée")
+                            .color(egui::Color32::GRAY)
+                            .italics(),
+                    );
                 } else {
                     Grid::new("inspector_custom_properties_grid")
                         .num_columns(2)
@@ -369,10 +412,17 @@ impl Inspector {
                         .show(ui, |ui| {
                             if let Some(definition) = custom_definition {
                                 for property in &definition.properties {
-                                    let value = props.entry(property.key.clone())
+                                    let value = props
+                                        .entry(property.key.clone())
                                         .or_insert_with(|| property.default_value.clone());
                                     ui.label(&property.key);
-                                    if show_custom_property_editor(ui, definition.id, property, value, scene_names) {
+                                    if show_custom_property_editor(
+                                        ui,
+                                        definition.id,
+                                        property,
+                                        value,
+                                        scene_names,
+                                    ) {
                                         modified = true;
                                     }
                                     ui.end_row();
@@ -390,8 +440,9 @@ impl Inspector {
             });
 
         if modified {
+            let unique_name = scene.unique_object_name(&name, Some(id));
             if let Some(obj) = scene.get_object_mut(id) {
-                obj.name = name;
+                obj.name = unique_name;
                 obj.tile_pos.x = tile_x;
                 obj.tile_pos.y = tile_y;
                 obj.tile_pos.z = tile_z;
@@ -450,13 +501,19 @@ impl Inspector {
         request_script_picker: &mut bool,
     ) -> TypeDefinitionEdit {
         let mut edit = TypeDefinitionEdit::default();
-        let Some(index) = object_types.iter().position(|definition| definition.id == type_id) else {
+        let Some(index) = object_types
+            .iter()
+            .position(|definition| definition.id == type_id)
+        else {
             ui.label("Sélectionne un type d’objet dans l’onglet Types.");
             return edit;
         };
-        let other_names: Vec<_> = object_types.iter().enumerate()
+        let other_names: Vec<_> = object_types
+            .iter()
+            .enumerate()
             .filter(|(other_index, _)| *other_index != index)
-            .map(|(_, definition)| definition.name.to_lowercase()).collect();
+            .map(|(_, definition)| definition.name.to_lowercase())
+            .collect();
         let definition = &mut object_types[index];
 
         ui.heading(format!("Type : {}", definition.name));
@@ -467,7 +524,9 @@ impl Inspector {
             let mut proposed = definition.name.clone();
             if ui.text_edit_singleline(&mut proposed).changed() {
                 let valid = !proposed.trim().is_empty()
-                    && !other_names.iter().any(|name| name == &proposed.trim().to_lowercase());
+                    && !other_names
+                        .iter()
+                        .any(|name| name == &proposed.trim().to_lowercase());
                 if valid {
                     definition.name = proposed.trim().to_owned();
                     edit.changed = true;
@@ -478,35 +537,95 @@ impl Inspector {
         egui::CollapsingHeader::new("Propriétés génériques par défaut")
             .default_open(true)
             .show(ui, |ui| {
-                let changed = ui.checkbox(&mut definition.defaults.has_collisions, "Collisions activées").changed()
-                    | ui.checkbox(&mut definition.defaults.hidden, "Masqué").changed()
-                    | ui.checkbox(&mut definition.defaults.fit_texture_to_diamond, "Ajuster la texture au losange").changed();
+                let changed = ui
+                    .checkbox(
+                        &mut definition.defaults.has_collisions,
+                        "Collisions activées",
+                    )
+                    .changed()
+                    | ui.checkbox(&mut definition.defaults.hidden, "Masqué")
+                        .changed()
+                    | ui.checkbox(
+                        &mut definition.defaults.fit_texture_to_diamond,
+                        "Ajuster la texture au losange",
+                    )
+                    .changed();
                 edit.changed |= changed;
                 ui.horizontal(|ui| {
                     ui.label("Empreinte");
-                    let width = ui.add(egui::DragValue::new(&mut definition.defaults.footprint.width).range(1..=256).prefix("L ")).changed();
-                    let height = ui.add(egui::DragValue::new(&mut definition.defaults.footprint.height).range(1..=256).prefix("H ")).changed();
+                    let width = ui
+                        .add(
+                            egui::DragValue::new(&mut definition.defaults.footprint.width)
+                                .range(1..=256)
+                                .prefix("L "),
+                        )
+                        .changed();
+                    let height = ui
+                        .add(
+                            egui::DragValue::new(&mut definition.defaults.footprint.height)
+                                .range(1..=256)
+                                .prefix("H "),
+                        )
+                        .changed();
                     if width || height {
-                        definition.defaults.footprint.width = definition.defaults.footprint.width.max(1);
-                        definition.defaults.footprint.height = definition.defaults.footprint.height.max(1);
+                        definition.defaults.footprint.width =
+                            definition.defaults.footprint.width.max(1);
+                        definition.defaults.footprint.height =
+                            definition.defaults.footprint.height.max(1);
                         edit.changed = true;
                     }
                 });
                 egui::ComboBox::from_id_salt(("custom_type_rotation", type_id))
                     .selected_text(format!("Rotation : {:?}", definition.defaults.rotation))
                     .show_ui(ui, |ui| {
-                        for rotation in [Rotation4::North, Rotation4::East, Rotation4::South, Rotation4::West] {
-                            edit.changed |= ui.selectable_value(&mut definition.defaults.rotation, rotation, format!("{rotation:?}")).changed();
+                        for rotation in [
+                            Rotation4::North,
+                            Rotation4::East,
+                            Rotation4::South,
+                            Rotation4::West,
+                        ] {
+                            edit.changed |= ui
+                                .selectable_value(
+                                    &mut definition.defaults.rotation,
+                                    rotation,
+                                    format!("{rotation:?}"),
+                                )
+                                .changed();
                         }
                     });
-                let layer_names = ["Terrain", "Décoration", "Ground", "Objects", "Buildings", "Foreground", "Overlay"];
-                let layers = [Layer::Terrain, Layer::Decoration, Layer::Ground, Layer::Objects, Layer::Buildings, Layer::Foreground, Layer::Overlay];
+                let layer_names = [
+                    "Terrain",
+                    "Décoration",
+                    "Ground",
+                    "Objects",
+                    "Buildings",
+                    "Foreground",
+                    "Overlay",
+                ];
+                let layers = [
+                    Layer::Terrain,
+                    Layer::Decoration,
+                    Layer::Ground,
+                    Layer::Objects,
+                    Layer::Buildings,
+                    Layer::Foreground,
+                    Layer::Overlay,
+                ];
                 let layer_index = definition.defaults.layer.sort_key() as usize;
                 egui::ComboBox::from_id_salt(("custom_type_layer", type_id))
-                    .selected_text(format!("Couche : {}", layer_names.get(layer_index).copied().unwrap_or("Objects")))
+                    .selected_text(format!(
+                        "Couche : {}",
+                        layer_names.get(layer_index).copied().unwrap_or("Objects")
+                    ))
                     .show_ui(ui, |ui| {
                         for (index, layer) in layers.into_iter().enumerate() {
-                            edit.changed |= ui.selectable_value(&mut definition.defaults.layer, layer, layer_names[index]).changed();
+                            edit.changed |= ui
+                                .selectable_value(
+                                    &mut definition.defaults.layer,
+                                    layer,
+                                    layer_names[index],
+                                )
+                                .changed();
                         }
                     });
                 ui.horizontal(|ui| {
@@ -519,10 +638,15 @@ impl Inspector {
                         recent_textures,
                         &["png", "jpg", "jpeg", "gif"],
                     ) {
-                        definition.defaults.texture = (!texture.trim().is_empty()).then(|| texture.trim().to_owned());
+                        definition.defaults.texture =
+                            (!texture.trim().is_empty()).then(|| texture.trim().to_owned());
                         edit.changed = true;
                     }
-                    if ui.small_button("…").on_hover_text("Choisir une texture").clicked() {
+                    if ui
+                        .small_button("…")
+                        .on_hover_text("Choisir une texture")
+                        .clicked()
+                    {
                         *request_texture_picker = true;
                     }
                     if definition.defaults.texture.is_some() && ui.small_button("×").clicked() {
@@ -540,13 +664,23 @@ impl Inspector {
                         recent_scripts,
                         &["py"],
                     ) {
-                        definition.defaults.script = (!script.trim().is_empty()).then(|| script.trim().to_owned());
+                        definition.defaults.script =
+                            (!script.trim().is_empty()).then(|| script.trim().to_owned());
                         edit.changed = true;
                     }
-                    if ui.small_button("…").on_hover_text("Choisir un script Python").clicked() {
+                    if ui
+                        .small_button("…")
+                        .on_hover_text("Choisir un script Python")
+                        .clicked()
+                    {
                         *request_script_picker = true;
                     }
-                    if definition.defaults.script.is_some() && ui.small_button("×").on_hover_text("Retirer le script").clicked() {
+                    if definition.defaults.script.is_some()
+                        && ui
+                            .small_button("×")
+                            .on_hover_text("Retirer le script")
+                            .clicked()
+                    {
                         definition.defaults.script = None;
                         edit.changed = true;
                     }
@@ -560,25 +694,41 @@ impl Inspector {
                 let mut number = 1;
                 let key = loop {
                     let candidate = format!("propriete_{number}");
-                    if !definition.properties.iter().any(|property| property.key == candidate) { break candidate; }
+                    if !definition
+                        .properties
+                        .iter()
+                        .any(|property| property.key == candidate)
+                    {
+                        break candidate;
+                    }
                     number += 1;
                 };
                 definition.properties.push(CustomPropertyDefinition {
-                    key, kind: CustomPropertyKind::Text, default_value: PropValue::Str(String::new()),
+                    key,
+                    kind: CustomPropertyKind::Text,
+                    default_value: PropValue::Str(String::new()),
                 });
                 edit.changed = true;
             }
         });
         let mut remove = None;
-        let mut keys: Vec<_> = definition.properties.iter().map(|property| property.key.clone()).collect();
+        let mut keys: Vec<_> = definition
+            .properties
+            .iter()
+            .map(|property| property.key.clone())
+            .collect();
         for (property_index, property) in definition.properties.iter_mut().enumerate() {
             ui.separator();
             ui.horizontal(|ui| {
                 let old_key = property.key.clone();
-                let response = ui.add(egui::TextEdit::singleline(&mut property.key).desired_width(110.0));
+                let response =
+                    ui.add(egui::TextEdit::singleline(&mut property.key).desired_width(110.0));
                 if response.changed() {
                     let valid = is_valid_property_key(&property.key) && property.key != "texture";
-                    let unique = keys.iter().enumerate().all(|(i, key)| i == property_index || key != &property.key);
+                    let unique = keys
+                        .iter()
+                        .enumerate()
+                        .all(|(i, key)| i == property_index || key != &property.key);
                     if valid && unique {
                         keys[property_index] = property.key.clone();
                         edit.renamed_property = Some((type_id, old_key, property.key.clone()));
@@ -590,18 +740,37 @@ impl Inspector {
                 egui::ComboBox::from_id_salt(("custom_property_kind", type_id, property_index))
                     .selected_text(custom_property_kind_label(property.kind))
                     .show_ui(ui, |ui| {
-                        for kind in [CustomPropertyKind::Text, CustomPropertyKind::Integer, CustomPropertyKind::Float, CustomPropertyKind::Boolean, CustomPropertyKind::Scene] {
-                            if ui.selectable_value(&mut property.kind, kind, custom_property_kind_label(kind)).changed() {
-                                property.default_value = default_custom_property_value(kind, scene_names);
+                        for kind in [
+                            CustomPropertyKind::Text,
+                            CustomPropertyKind::Integer,
+                            CustomPropertyKind::Float,
+                            CustomPropertyKind::Boolean,
+                            CustomPropertyKind::Scene,
+                        ] {
+                            if ui
+                                .selectable_value(
+                                    &mut property.kind,
+                                    kind,
+                                    custom_property_kind_label(kind),
+                                )
+                                .changed()
+                            {
+                                property.default_value =
+                                    default_custom_property_value(kind, scene_names);
                                 edit.changed = true;
                             }
                         }
                     });
-                if ui.small_button("×").on_hover_text("Retirer cette propriété").clicked() {
+                if ui
+                    .small_button("×")
+                    .on_hover_text("Retirer cette propriété")
+                    .clicked()
+                {
                     remove = Some(property_index);
                 }
             });
-            edit.changed |= show_custom_property_default(ui, type_id, property_index, property, scene_names);
+            edit.changed |=
+                show_custom_property_default(ui, type_id, property_index, property, scene_names);
         }
         if let Some(index) = remove {
             definition.properties.remove(index);
@@ -620,11 +789,20 @@ fn recent_asset_path_field(
 ) -> bool {
     let response = ui.push_id(salt, |ui| ui.text_edit_singleline(value)).inner;
     let popup_id = response.id.with("recent_asset_suggestions");
-    let matching_paths = recent_paths.iter().filter(|path| {
-        std::path::Path::new(path).extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| allowed_extensions.iter().any(|allowed| extension.eq_ignore_ascii_case(allowed)))
-    }).take(12).collect::<Vec<_>>();
+    let matching_paths = recent_paths
+        .iter()
+        .filter(|path| {
+            std::path::Path::new(path)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    allowed_extensions
+                        .iter()
+                        .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+                })
+        })
+        .take(12)
+        .collect::<Vec<_>>();
 
     if !matching_paths.is_empty() && (response.clicked() || response.gained_focus()) {
         ui.memory_mut(|memory| memory.open_popup(popup_id));
@@ -638,16 +816,20 @@ fn recent_asset_path_field(
             &response,
             egui::PopupCloseBehavior::CloseOnClickOutside,
             |ui| {
-                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-                    for path in &matching_paths {
-                        if ui.selectable_label(false, path.as_str())
-                            .on_hover_text(path.as_str()).clicked()
-                        {
-                            *value = (*path).clone();
-                            selected = true;
+                egui::ScrollArea::vertical()
+                    .max_height(180.0)
+                    .show(ui, |ui| {
+                        for path in &matching_paths {
+                            if ui
+                                .selectable_label(false, path.as_str())
+                                .on_hover_text(path.as_str())
+                                .clicked()
+                            {
+                                *value = (*path).clone();
+                                selected = true;
+                            }
                         }
-                    }
-                });
+                    });
             },
         );
     }
@@ -679,12 +861,18 @@ fn show_custom_property_editor(
             changed |= ui.checkbox(value, "Activée").changed();
         }
         (CustomPropertyKind::Scene, PropValue::Str(value)) => {
-            let label = if value.is_empty() { "Choisir une scène…" } else { value.as_str() };
+            let label = if value.is_empty() {
+                "Choisir une scène…"
+            } else {
+                value.as_str()
+            };
             egui::ComboBox::from_id_salt(("inspector_scene_property", type_id, &definition.key))
                 .selected_text(label)
                 .show_ui(ui, |ui| {
                     for scene_name in scene_names {
-                        changed |= ui.selectable_value(value, scene_name.clone(), scene_name).changed();
+                        changed |= ui
+                            .selectable_value(value, scene_name.clone(), scene_name)
+                            .changed();
                     }
                 });
         }

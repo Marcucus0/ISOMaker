@@ -1,5 +1,6 @@
 //! Vue centrale de la scène isométrique dessinée via egui Painter.
 
+use crate::{camera::Camera, toolbar::EditorTool};
 use egui::{Color32, Painter, Rect, Sense, Stroke, Ui, Vec2};
 use image::AnimationDecoder;
 use std::{
@@ -8,15 +9,12 @@ use std::{
     io::BufReader,
     path::Path,
 };
+use scripting::command::{HudAnchor, HudText};
 use world::{
     coords::{IsoProjection, ScreenPos, TilePos},
     grid::{TileData, TileDefinition},
     object::{ObjectId, ObjectType, Rotation4, SceneObject},
     scene::Scene,
-};
-use crate::{
-    camera::Camera,
-    toolbar::EditorTool,
 };
 
 /// Options d'affichage de la grille.
@@ -41,9 +39,15 @@ impl Default for GridOptions {
 /// État de la vue scène.
 pub struct SceneView {
     pub camera: Camera,
+    /// Cadrage d'édition conservé séparément pour chaque scène (par nom).
+    scene_cameras: HashMap<String, Camera>,
+    active_scene_name: Option<String>,
     pub options: GridOptions,
     /// Tuile actuellement survolée.
     pub hovered_tile: Option<TilePos>,
+    /// Dernière tuile survolée dans le viewport, utile lorsqu'une commande est
+    /// déclenchée depuis un panneau latéral.
+    last_hovered_tile: Option<TilePos>,
     /// Objet sélectionné.
     pub selected_object: Option<ObjectId>,
     /// Objets inclus dans la sélection multiple.
@@ -51,8 +55,8 @@ pub struct SceneView {
     /// Tuiles incluses dans la sélection courante.
     pub selected_tiles: HashSet<TilePos>,
     delete_requested: Option<(Vec<ObjectId>, Vec<TilePos>)>,
-    /// Données de tuile copiées dans l'éditeur.
-    copied_tile: Option<TileData>,
+    /// Zone de tuiles copiée, stockée relativement à son coin supérieur logique.
+    copied_tiles: Option<CopiedTiles>,
     /// Copied objects are kept in the view so they survive scene switches.
     copied_objects: Option<Vec<SceneObject>>,
     copy_tile_requested: bool,
@@ -78,11 +82,19 @@ pub struct SceneView {
     animated_tile_textures: HashMap<String, AnimatedTileTexture>,
     failed_animated_tile_textures: HashSet<String>,
     object_hit_rects: HashMap<ObjectId, Rect>,
+    object_hit_diamonds: HashSet<ObjectId>,
+    clicked_object: Option<ObjectId>,
 }
 
 struct AnimatedTileFrame {
     image: egui::ColorImage,
     duration_seconds: f32,
+}
+
+struct CopiedTiles {
+    width: i32,
+    height: i32,
+    tiles: Vec<(i32, i32, TileData)>,
 }
 
 struct AnimatedTileTexture {
@@ -114,13 +126,16 @@ impl Default for SceneView {
     fn default() -> Self {
         Self {
             camera: Camera::default(),
+            scene_cameras: HashMap::new(),
+            active_scene_name: None,
             options: GridOptions::default(),
             hovered_tile: None,
+            last_hovered_tile: None,
             selected_object: None,
             selected_objects: HashSet::new(),
             selected_tiles: HashSet::new(),
             delete_requested: None,
-            copied_tile: None,
+            copied_tiles: None,
             copied_objects: None,
             copy_tile_requested: false,
             paste_tile_requested: false,
@@ -143,24 +158,82 @@ impl Default for SceneView {
             animated_tile_textures: HashMap::new(),
             failed_animated_tile_textures: HashSet::new(),
             object_hit_rects: HashMap::new(),
+            object_hit_diamonds: HashSet::new(),
+            clicked_object: None,
         }
     }
 }
 
 impl SceneView {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn take_delete_request(&mut self) -> Option<(Vec<ObjectId>, Vec<TilePos>)> {
         self.delete_requested.take()
     }
 
+    pub fn take_clicked_object(&mut self) -> Option<ObjectId> {
+        self.clicked_object.take()
+    }
+
+    /// Sauvegarde le cadrage courant et restaure celui de la scène demandée.
+    pub fn activate_scene_view(&mut self, scene_name: &str) {
+        if self.active_scene_name.as_deref() == Some(scene_name) {
+            return;
+        }
+        if let Some(previous_name) = self.active_scene_name.take() {
+            self.scene_cameras
+                .insert(previous_name, self.camera.clone());
+        }
+        self.camera = self
+            .scene_cameras
+            .get(scene_name)
+            .cloned()
+            .unwrap_or_default();
+        self.active_scene_name = Some(scene_name.to_owned());
+    }
+
+    pub fn rename_scene_view(&mut self, old_name: &str, new_name: &str) {
+        if let Some(camera) = self.scene_cameras.remove(old_name) {
+            self.scene_cameras.insert(new_name.to_owned(), camera);
+        }
+        if self.active_scene_name.as_deref() == Some(old_name) {
+            self.active_scene_name = Some(new_name.to_owned());
+        }
+    }
+
+    pub fn remove_scene_view(&mut self, scene_name: &str) {
+        self.scene_cameras.remove(scene_name);
+    }
+
+    pub fn clear_scene_views(&mut self) {
+        self.scene_cameras.clear();
+        self.active_scene_name = None;
+        self.camera = Camera::default();
+    }
+
+    /// Position à utiliser lors de la création d'un objet : tuile sélectionnée
+    /// en priorité, puis tuile survolée.
+    pub fn object_placement_tile(&self) -> Option<TilePos> {
+        self.selected_tiles
+            .iter()
+            .min_by_key(|tile| (tile.y, tile.x, tile.z))
+            .copied()
+            .or(self.hovered_tile)
+            .or(self.last_hovered_tile)
+    }
+
     pub fn request_clipboard_shortcut(&mut self, copy: bool) {
-        if copy { self.copy_tile_requested = true; }
-        else { self.paste_tile_requested = true; }
+        if copy {
+            self.copy_tile_requested = true;
+        } else {
+            self.paste_tile_requested = true;
+        }
     }
 
     pub fn clear_clipboard(&mut self) {
-        self.copied_tile = None;
+        self.copied_tiles = None;
         self.copied_objects = None;
         self.copy_tile_requested = false;
         self.paste_tile_requested = false;
@@ -183,39 +256,66 @@ impl SceneView {
         show_grid: bool,
         show_camera_selector: bool,
         runtime_camera: &mut Option<ObjectId>,
+        hud_texts: &[HudText],
     ) -> bool {
         let mut modified = false;
         self.update_animated_tile_textures(ui.ctx(), asset_root, tile_definitions, delta_time);
         let proj = scene.projection();
-        let active_tool = if interactive { active_tool } else { EditorTool::Select };
+        let active_tool = if interactive {
+            active_tool
+        } else {
+            EditorTool::Select
+        };
 
         // Zone disponible pour la scène.
         let (response, painter) = ui.allocate_painter(
             ui.available_size(),
-            if interactive { Sense::click_and_drag() } else { Sense::hover() },
+            if interactive {
+                Sense::click_and_drag()
+            } else if runtime_view {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
         );
         let rect = response.rect;
         let center = rect.center().to_vec2();
 
-        if interactive && ui.input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::D)) {
+        self.clicked_object =
+            if runtime_view && !interactive && response.clicked_by(egui::PointerButton::Primary) {
+                response
+                    .interact_pointer_pos()
+                    .and_then(|pointer| self.find_object_at_screen(scene, pointer, &proj, center))
+            } else {
+                None
+            };
+
+        if interactive && ui.input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::D))
+        {
             self.selected_tiles.clear();
             self.selected_object = None;
             self.selected_objects.clear();
         }
-        if interactive && !ui.ctx().wants_keyboard_input()
+        if interactive
+            && !ui.ctx().wants_keyboard_input()
             && ui.input(|input| input.key_pressed(egui::Key::Delete))
         {
             if !self.selected_objects.is_empty() {
-                self.delete_requested = Some((self.selected_objects.iter().copied().collect(), Vec::new()));
+                self.delete_requested =
+                    Some((self.selected_objects.iter().copied().collect(), Vec::new()));
             } else if let Some(id) = self.selected_object {
                 self.delete_requested = Some((vec![id], Vec::new()));
             } else if !self.selected_tiles.is_empty() {
                 let tiles: Vec<_> = self.selected_tiles.iter().copied().collect();
                 let selected_xy = &tiles;
-                let object_ids: Vec<_> = scene.objects.values()
-                    .filter(|object| selected_xy.iter().any(|tile| {
-                        tile.x == object.tile_pos.x && tile.y == object.tile_pos.y
-                    }))
+                let object_ids: Vec<_> = scene
+                    .objects
+                    .values()
+                    .filter(|object| {
+                        selected_xy
+                            .iter()
+                            .any(|tile| tile.x == object.tile_pos.x && tile.y == object.tile_pos.y)
+                    })
                     .map(|object| object.id)
                     .collect();
                 if object_ids.is_empty() {
@@ -250,7 +350,8 @@ impl SceneView {
                 && ui.input(|i| i.modifiers.alt))
         {
             self.is_panning = true;
-            self.pan_start = response.interact_pointer_pos()
+            self.pan_start = response
+                .interact_pointer_pos()
                 .map(|p| p.to_vec2())
                 .unwrap_or_default();
             self.pan_cam_start = self.camera.position;
@@ -267,41 +368,75 @@ impl SceneView {
         }
 
         // Tuile survolée.
-        self.hovered_tile = response.hover_pos().or_else(|| response.interact_pointer_pos()).map(|p| {
-            let world = self.camera.screen_to_world(p.to_vec2() - center, Vec2::ZERO);
-            proj.screen_to_tile(ScreenPos::new(world.x, world.y))
-        });
+        self.hovered_tile = response
+            .hover_pos()
+            .or_else(|| response.interact_pointer_pos())
+            .map(|p| {
+                let world = self
+                    .camera
+                    .screen_to_world(p.to_vec2() - center, Vec2::ZERO);
+                proj.screen_to_tile(ScreenPos::new(world.x, world.y))
+            });
+        if self.hovered_tile.is_some() {
+            self.last_hovered_tile = self.hovered_tile;
+        }
 
         // Copy/paste in the viewport while the Select tool is active.
         if interactive && active_tool == EditorTool::Select {
             let copy = std::mem::take(&mut self.copy_tile_requested);
             let paste = std::mem::take(&mut self.paste_tile_requested);
             if copy {
-                let mut object_ids: Vec<_> = self.selected_objects.iter().copied()
+                let mut object_ids: Vec<_> = self
+                    .selected_objects
+                    .iter()
+                    .copied()
                     .filter(|id| scene.get_object(*id).is_some())
                     .collect();
                 if object_ids.is_empty() {
-                    object_ids.extend(self.selected_object.filter(|id| scene.get_object(*id).is_some()));
+                    object_ids.extend(
+                        self.selected_object
+                            .filter(|id| scene.get_object(*id).is_some()),
+                    );
                 }
                 if !object_ids.is_empty() {
                     object_ids.sort_by_key(|id| id.to_string());
-                    self.copied_objects = Some(object_ids.iter()
-                        .filter_map(|id| scene.get_object(*id).cloned())
-                        .collect());
-                    self.copied_tile = None;
-                } else if self.selected_tiles.len() == 1 {
-                    if let Some(tile) = self.selected_tiles.iter().next().copied() {
-                        self.copied_tile = Some(scene.get_tile(tile));
-                        self.copied_objects = None;
+                    self.copied_objects = Some(
+                        object_ids
+                            .iter()
+                            .filter_map(|id| scene.get_object(*id).cloned())
+                            .collect(),
+                    );
+                    self.copied_tiles = None;
+                } else if !self.selected_tiles.is_empty() {
+                    let min_x = self.selected_tiles.iter().map(|tile| tile.x).min().unwrap_or(0);
+                    let max_x = self.selected_tiles.iter().map(|tile| tile.x).max().unwrap_or(min_x);
+                    let min_y = self.selected_tiles.iter().map(|tile| tile.y).min().unwrap_or(0);
+                    let max_y = self.selected_tiles.iter().map(|tile| tile.y).max().unwrap_or(min_y);
+                    let mut tiles = Vec::with_capacity(((max_x - min_x + 1) * (max_y - min_y + 1)) as usize);
+                    for y in min_y..=max_y {
+                        for x in min_x..=max_x {
+                            tiles.push((x - min_x, y - min_y, scene.get_tile(TilePos::new(x, y))));
+                        }
                     }
+                    self.copied_tiles = Some(CopiedTiles {
+                        width: max_x - min_x + 1,
+                        height: max_y - min_y + 1,
+                        tiles,
+                    });
+                    self.copied_objects = None;
                 }
             }
             if paste {
                 let selected_tile = (self.selected_tiles.len() == 1)
                     .then(|| self.selected_tiles.iter().next().copied())
                     .flatten();
-                if let (Some(anchor), Some(objects)) = (self.hovered_tile.or(selected_tile), self.copied_objects.as_ref()) {
-                    if let Some(origin) = objects.iter().map(|object| object.tile_pos)
+                if let (Some(anchor), Some(objects)) = (
+                    self.hovered_tile.or(selected_tile),
+                    self.copied_objects.as_ref(),
+                ) {
+                    if let Some(origin) = objects
+                        .iter()
+                        .map(|object| object.tile_pos)
                         .min_by_key(|pos| (pos.x, pos.y, pos.z))
                     {
                         let mut pasted_ids = HashSet::new();
@@ -320,12 +455,34 @@ impl SceneView {
                         self.selected_object = sole_object(&self.selected_objects);
                         modified = true;
                     }
-                } else if let (Some(tile), Some(data)) = (selected_tile.or(self.hovered_tile), self.copied_tile) {
-                    if scene.get_tile(tile) != data {
-                        if data.is_empty() { scene.clear_tile(tile); }
-                        else { scene.set_tile(tile, data); }
-                        modified = true;
+                } else if let (Some(anchor), Some(copied)) = (
+                    self.selected_tiles
+                        .iter()
+                        .min_by_key(|tile| (tile.y, tile.x))
+                        .copied()
+                        .or(self.hovered_tile),
+                    self.copied_tiles.as_ref(),
+                ) {
+                    for (offset_x, offset_y, data) in &copied.tiles {
+                        let destination = TilePos::new(anchor.x + offset_x, anchor.y + offset_y);
+                        if scene.get_tile(destination) != *data {
+                            if data.is_empty() {
+                                scene.clear_tile(destination);
+                            } else {
+                                scene.set_tile(destination, *data);
+                            }
+                            modified = true;
+                        }
                     }
+                    self.selected_tiles.clear();
+                    self.selected_tiles = tile_rectangle(
+                        anchor,
+                        TilePos::new(anchor.x + copied.width - 1, anchor.y + copied.height - 1),
+                    );
+                    self.selected_object = None;
+                    self.selected_objects.clear();
+                } else if let Some(tile) = selected_tile.or(self.hovered_tile) {
+                    // Keep selection behavior stable when the clipboard contains objects.
                     self.selected_tiles.clear();
                     self.selected_tiles.insert(tile);
                     self.selected_object = None;
@@ -334,9 +491,8 @@ impl SceneView {
             }
         }
 
-
         // Sélection par clic ou rectangle de tuiles.
-        if active_tool == EditorTool::Select && !self.is_panning {
+        if interactive && active_tool == EditorTool::Select && !self.is_panning {
             if response.drag_started_by(egui::PointerButton::Primary) {
                 self.selection_start = self.hovered_tile;
                 self.selection_objects_only = ui.input(|input| input.modifiers.shift);
@@ -358,9 +514,9 @@ impl SceneView {
                 }
             }
             if response.clicked_by(egui::PointerButton::Primary) {
-                let hit_object = response.interact_pointer_pos().and_then(|pointer| {
-                    self.find_object_at_screen(scene, pointer, &proj, center)
-                });
+                let hit_object = response
+                    .interact_pointer_pos()
+                    .and_then(|pointer| self.find_object_at_screen(scene, pointer, &proj, center));
                 if ui.input(|input| input.modifiers.shift) {
                     self.selected_tiles.clear();
                     if let Some(id) = hit_object {
@@ -403,9 +559,9 @@ impl SceneView {
                 self.move_start = self.hovered_tile;
                 self.move_tiles.clear();
                 self.move_objects.clear();
-                let hit_object = response.interact_pointer_pos().and_then(|pointer| {
-                    self.find_object_at_screen(scene, pointer, &proj, center)
-                });
+                let hit_object = response
+                    .interact_pointer_pos()
+                    .and_then(|pointer| self.find_object_at_screen(scene, pointer, &proj, center));
                 if let Some(id) = hit_object {
                     if !self.selected_objects.contains(&id) {
                         self.selected_objects.clear();
@@ -413,11 +569,16 @@ impl SceneView {
                     }
                     self.selected_object = sole_object(&self.selected_objects);
                     self.selected_tiles.clear();
-                    self.move_objects.extend(self.selected_objects.iter().filter_map(|id| {
-                        scene.get_object(*id).map(|object| (*id, object.tile_pos))
-                    }));
+                    self.move_objects
+                        .extend(self.selected_objects.iter().filter_map(|id| {
+                            scene.get_object(*id).map(|object| (*id, object.tile_pos))
+                        }));
                 } else if !self.selected_tiles.is_empty() {
-                    self.move_tiles.extend(self.selected_tiles.iter().map(|&tile| (tile, scene.get_tile(tile))));
+                    self.move_tiles.extend(
+                        self.selected_tiles
+                            .iter()
+                            .map(|&tile| (tile, scene.get_tile(tile))),
+                    );
                 } else if let Some(tile) = self.hovered_tile {
                     self.move_tiles.push((tile, scene.get_tile(tile)));
                 }
@@ -444,11 +605,16 @@ impl SceneView {
                         }
                         for &(tile, data) in &self.move_tiles {
                             if !data.is_empty() {
-                                scene.set_tile(TilePos::with_z(tile.x + dx, tile.y + dy, tile.z), data);
+                                scene.set_tile(
+                                    TilePos::with_z(tile.x + dx, tile.y + dy, tile.z),
+                                    data,
+                                );
                             }
                         }
                         if !self.selected_tiles.is_empty() {
-                            self.selected_tiles = self.selected_tiles.iter()
+                            self.selected_tiles = self
+                                .selected_tiles
+                                .iter()
                                 .map(|tile| TilePos::with_z(tile.x + dx, tile.y + dy, tile.z))
                                 .collect();
                         }
@@ -466,14 +632,32 @@ impl SceneView {
             if response.drag_started_by(egui::PointerButton::Primary)
                 && !self.selected_tiles.is_empty()
             {
-                let min_x = self.selected_tiles.iter().map(|tile| tile.x).min().unwrap_or(0);
-                let max_x = self.selected_tiles.iter().map(|tile| tile.x).max().unwrap_or(0);
-                let min_y = self.selected_tiles.iter().map(|tile| tile.y).min().unwrap_or(0);
-                let max_y = self.selected_tiles.iter().map(|tile| tile.y).max().unwrap_or(0);
-                let logical_center = Vec2::new(
-                    (min_x + max_x) as f32 * 0.5,
-                    (min_y + max_y) as f32 * 0.5,
-                );
+                let min_x = self
+                    .selected_tiles
+                    .iter()
+                    .map(|tile| tile.x)
+                    .min()
+                    .unwrap_or(0);
+                let max_x = self
+                    .selected_tiles
+                    .iter()
+                    .map(|tile| tile.x)
+                    .max()
+                    .unwrap_or(0);
+                let min_y = self
+                    .selected_tiles
+                    .iter()
+                    .map(|tile| tile.y)
+                    .min()
+                    .unwrap_or(0);
+                let max_y = self
+                    .selected_tiles
+                    .iter()
+                    .map(|tile| tile.y)
+                    .max()
+                    .unwrap_or(0);
+                let logical_center =
+                    Vec2::new((min_x + max_x) as f32 * 0.5, (min_y + max_y) as f32 * 0.5);
                 let world_center = Vec2::new(
                     (logical_center.x - logical_center.y) * proj.half_width(),
                     (logical_center.x + logical_center.y) * proj.half_height(),
@@ -486,7 +670,9 @@ impl SceneView {
                 self.rotate_accumulated_angle = 0.0;
                 self.rotate_steps = 0;
                 self.rotate_bounds = Some((min_x, min_y, max_x, max_y));
-                self.rotate_tiles = self.selected_tiles.iter()
+                self.rotate_tiles = self
+                    .selected_tiles
+                    .iter()
                     .map(|&tile| (tile, scene.get_tile(tile)))
                     .collect();
             }
@@ -500,12 +686,17 @@ impl SceneView {
                     let delta = pointer.to_vec2() - self.rotate_pivot;
                     let angle = delta.y.atan2(delta.x);
                     let mut difference = angle - last_angle;
-                    while difference > std::f32::consts::PI { difference -= std::f32::consts::TAU; }
-                    while difference < -std::f32::consts::PI { difference += std::f32::consts::TAU; }
+                    while difference > std::f32::consts::PI {
+                        difference -= std::f32::consts::TAU;
+                    }
+                    while difference < -std::f32::consts::PI {
+                        difference += std::f32::consts::TAU;
+                    }
                     self.rotate_accumulated_angle += difference;
                     self.rotate_last_angle = Some(angle);
                     self.rotate_steps = (self.rotate_accumulated_angle
-                        / std::f32::consts::FRAC_PI_2).round() as i32;
+                        / std::f32::consts::FRAC_PI_2)
+                        .round() as i32;
                 }
             }
 
@@ -516,24 +707,39 @@ impl SceneView {
                 if steps != 0 {
                     if let Some(bounds) = self.rotate_bounds {
                         for &(tile, data) in &self.rotate_tiles {
-                            if !data.is_empty() { scene.clear_tile(tile); }
+                            if !data.is_empty() {
+                                scene.clear_tile(tile);
+                            }
                         }
                         for &(tile, data) in &self.rotate_tiles {
                             let rotated = rotate_tile_in_bounds(tile, bounds, steps);
-                            if !data.is_empty() { scene.set_tile(rotated, data); }
+                            if !data.is_empty() {
+                                scene.set_tile(rotated, data);
+                            }
                         }
-                        self.selected_tiles = self.rotate_tiles.iter()
+                        self.selected_tiles = self
+                            .rotate_tiles
+                            .iter()
                             .map(|(tile, _)| rotate_tile_in_bounds(*tile, bounds, steps))
                             .collect();
 
-                        let object_ids: Vec<_> = scene.objects.values()
-                            .filter(|object| self.rotate_tiles.iter().any(|(tile, _)| *tile == object.tile_pos))
+                        let object_ids: Vec<_> = scene
+                            .objects
+                            .values()
+                            .filter(|object| {
+                                self.rotate_tiles
+                                    .iter()
+                                    .any(|(tile, _)| *tile == object.tile_pos)
+                            })
                             .map(|object| object.id)
                             .collect();
                         for &id in &object_ids {
                             if let Some(object) = scene.get_object_mut(id) {
-                                object.tile_pos = rotate_tile_in_bounds(object.tile_pos, bounds, steps);
-                                for _ in 0..steps { object.rotation = object.rotation.next(); }
+                                object.tile_pos =
+                                    rotate_tile_in_bounds(object.tile_pos, bounds, steps);
+                                for _ in 0..steps {
+                                    object.rotation = object.rotation.next();
+                                }
                             }
                         }
                         modified = self.rotate_tiles.iter().any(|(_, data)| !data.is_empty())
@@ -552,29 +758,43 @@ impl SceneView {
         painter.rect_filled(rect, 0.0, Color32::from_rgb(30, 35, 40));
 
         // ── Dessin de la grille et des tuiles ─────────────────────────────────
-        self.draw_grid(ui, scene, tile_definitions, asset_root, &painter, &proj, center, rect, show_grid, runtime_view);
+        self.draw_grid(
+            ui,
+            scene,
+            tile_definitions,
+            asset_root,
+            &painter,
+            &proj,
+            center,
+            rect,
+            show_grid,
+            runtime_view,
+        );
 
         // Les données réelles restent en place jusqu'au relâchement du clic.
-        if response.dragged_by(egui::PointerButton::Primary)
-            && active_tool == EditorTool::Move
-        {
+        if response.dragged_by(egui::PointerButton::Primary) && active_tool == EditorTool::Move {
             self.draw_move_preview(scene, &painter, &proj, center);
         }
-        if response.dragged_by(egui::PointerButton::Primary)
-            && active_tool == EditorTool::Rotate
-        {
+        if response.dragged_by(egui::PointerButton::Primary) && active_tool == EditorTool::Rotate {
             self.draw_rotate_preview(&painter, &proj, center);
         }
         if active_tool == EditorTool::Select && self.selection_objects_only {
             self.draw_object_selection_bounds(&painter, &proj, center);
         }
         // ── Dessin des objets ─────────────────────────────────────────────────
-        self.draw_objects(ui.ctx(), scene, &painter, &proj, center, rect, asset_root, interactive);
+        self.draw_objects(
+            ui.ctx(),
+            scene,
+            &painter,
+            &proj,
+            center,
+            rect,
+            asset_root,
+            interactive,
+        );
 
         // ── Interactions (paint, sélection) ──────────────────────────────────
-        if response.clicked_by(egui::PointerButton::Primary)
-            && !self.is_panning
-        {
+        if response.clicked_by(egui::PointerButton::Primary) && !self.is_panning {
             if let Some(tile) = self.hovered_tile {
                 match active_tool {
                     EditorTool::TilePaint => {
@@ -598,7 +818,8 @@ impl SceneView {
                     }
                     EditorTool::Rotate => {
                         if self.selected_tiles.is_empty() {
-                            let target = self.selected_object
+                            let target = self
+                                .selected_object
                                 .filter(|&id| scene.get_object(id).is_some())
                                 .or_else(|| self.find_object_at(scene, tile));
                             if let Some(object) = target.and_then(|id| scene.get_object_mut(id)) {
@@ -651,6 +872,30 @@ impl SceneView {
             );
         }
 
+        if runtime_view {
+            let hud_painter = painter.with_clip_rect(rect);
+            for hud in hud_texts {
+                let anchor_pos = match hud.anchor {
+                    HudAnchor::TopLeft => (egui::pos2(rect.left() + hud.x, rect.top() + hud.y), egui::Align2::LEFT_TOP),
+                    HudAnchor::TopCenter => (egui::pos2(rect.center().x + hud.x, rect.top() + hud.y), egui::Align2::CENTER_TOP),
+                    HudAnchor::TopRight => (egui::pos2(rect.right() + hud.x, rect.top() + hud.y), egui::Align2::RIGHT_TOP),
+                    HudAnchor::CenterLeft => (egui::pos2(rect.left() + hud.x, rect.center().y + hud.y), egui::Align2::LEFT_CENTER),
+                    HudAnchor::Center => (rect.center() + Vec2::new(hud.x, hud.y), egui::Align2::CENTER_CENTER),
+                    HudAnchor::CenterRight => (egui::pos2(rect.right() + hud.x, rect.center().y + hud.y), egui::Align2::RIGHT_CENTER),
+                    HudAnchor::BottomLeft => (egui::pos2(rect.left() + hud.x, rect.bottom() + hud.y), egui::Align2::LEFT_BOTTOM),
+                    HudAnchor::BottomCenter => (egui::pos2(rect.center().x + hud.x, rect.bottom() + hud.y), egui::Align2::CENTER_BOTTOM),
+                    HudAnchor::BottomRight => (egui::pos2(rect.right() + hud.x, rect.bottom() + hud.y), egui::Align2::RIGHT_BOTTOM),
+                };
+                hud_painter.text(
+                    anchor_pos.0,
+                    anchor_pos.1,
+                    &hud.text,
+                    egui::FontId::proportional(hud.font_size.clamp(6.0, 128.0)),
+                    Color32::from_rgba_unmultiplied(hud.color[0], hud.color[1], hud.color[2], hud.color[3]),
+                );
+            }
+        }
+
         if !interactive && show_camera_selector {
             show_runtime_camera_selector(ui.ctx(), scene, rect, runtime_camera);
         }
@@ -677,20 +922,34 @@ impl SceneView {
             .iter()
             .map(|definition| (definition.id, definition))
             .collect();
-        let cam_tile = proj.screen_to_tile(
-            world::coords::ScreenPos::new(self.camera.position.x, self.camera.position.y),
-        );
-        let tile_range = (rect.width().hypot(rect.height())
-            / (proj.tile_height * zoom).max(1.0))
-            .ceil() as i32;
+        let cam_tile = proj.screen_to_tile(world::coords::ScreenPos::new(
+            self.camera.position.x,
+            self.camera.position.y,
+        ));
+        let tile_range =
+            (rect.width().hypot(rect.height()) / (proj.tile_height * zoom).max(1.0)).ceil() as i32;
         let tile_range = tile_range.saturating_add(4).clamp(4, 2048);
         // Once an individual tile is only a few pixels wide, render a coarser
         // lattice and chunk summaries instead of thousands of tiny diamonds.
         let detailed = zoom >= 0.85;
-        let step = if detailed { 1 } else { (2.0 / zoom).ceil() as i32 };
+        let step = if detailed {
+            1
+        } else {
+            (2.0 / zoom).ceil() as i32
+        };
 
         if !detailed {
-            self.draw_low_zoom_tiles(scene, &definitions_by_id, painter, proj, center, rect, cam_tile, tile_range, runtime_view);
+            self.draw_low_zoom_tiles(
+                scene,
+                &definitions_by_id,
+                painter,
+                proj,
+                center,
+                rect,
+                cam_tile,
+                tile_range,
+                runtime_view,
+            );
         }
 
         // Anchor coarse grid vertices to world coordinates, not to the camera
@@ -725,11 +984,20 @@ impl SceneView {
 
                 // Ignore si hors de la vue.
                 let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
-                let max_x = corners.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
+                let max_x = corners
+                    .iter()
+                    .map(|p| p.x)
+                    .fold(f32::NEG_INFINITY, f32::max);
                 let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-                let max_y = corners.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
-                if max_x < rect.left() || min_x > rect.right()
-                    || max_y < rect.top()  || min_y > rect.bottom() {
+                let max_y = corners
+                    .iter()
+                    .map(|p| p.y)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                if max_x < rect.left()
+                    || min_x > rect.right()
+                    || max_y < rect.top()
+                    || min_y > rect.bottom()
+                {
                     continue;
                 }
 
@@ -738,37 +1006,61 @@ impl SceneView {
                     let tile_data = scene.get_tile(tile);
                     if !tile_data.is_empty() {
                         let definition = definitions_by_id.get(&tile_data.tile_type).copied();
-                        let editor_only = runtime_view && definition.is_some_and(|definition| definition.editor_only);
+                        let editor_only = runtime_view
+                            && definition.is_some_and(|definition| definition.editor_only);
                         if !editor_only {
-                        let texture = definition.and_then(|definition| definition.texture.as_deref())
-                            .and_then(|path| self.load_tile_texture_id(ui.ctx(), asset_root, path));
-                        if let Some(texture_id) = texture {
-                            let base_uvs = [
-                                egui::pos2(0.5, 0.0), egui::pos2(1.0, 0.5),
-                                egui::pos2(0.5, 1.0), egui::pos2(0.0, 0.5),
-                            ];
-                            let rotation = definition
-                                .filter(|definition| definition.randomize_texture_rotation)
-                                .map(|_| tile_texture_rotation(tile, tile_data.tile_type))
-                                .unwrap_or(0);
-                            let uvs: [egui::Pos2; 4] =
-                                std::array::from_fn(|index| base_uvs[(index + rotation) % 4]);
-                            let mesh = textured_tiles.entry(texture_id)
-                                .or_insert_with(|| egui::Mesh::with_texture(texture_id));
-                            let first = mesh.vertices.len() as u32;
-                            for (position, uv) in corners.into_iter().zip(uvs) {
-                                mesh.vertices.push(egui::epaint::Vertex { pos: position, uv, color: Color32::WHITE });
+                            let texture = definition
+                                .and_then(|definition| definition.texture.as_deref())
+                                .and_then(|path| {
+                                    self.load_tile_texture_id(ui.ctx(), asset_root, path)
+                                });
+                            if let Some(texture_id) = texture {
+                                let base_uvs = [
+                                    egui::pos2(0.5, 0.0),
+                                    egui::pos2(1.0, 0.5),
+                                    egui::pos2(0.5, 1.0),
+                                    egui::pos2(0.0, 0.5),
+                                ];
+                                let rotation = definition
+                                    .filter(|definition| definition.randomize_texture_rotation)
+                                    .map(|_| tile_texture_rotation(tile, tile_data.tile_type))
+                                    .unwrap_or(0);
+                                let uvs: [egui::Pos2; 4] =
+                                    std::array::from_fn(|index| base_uvs[(index + rotation) % 4]);
+                                let mesh = textured_tiles
+                                    .entry(texture_id)
+                                    .or_insert_with(|| egui::Mesh::with_texture(texture_id));
+                                let first = mesh.vertices.len() as u32;
+                                for (position, uv) in corners.into_iter().zip(uvs) {
+                                    mesh.vertices.push(egui::epaint::Vertex {
+                                        pos: position,
+                                        uv,
+                                        color: Color32::WHITE,
+                                    });
+                                }
+                                mesh.add_triangle(first, first + 1, first + 2);
+                                mesh.add_triangle(first, first + 2, first + 3);
+                            } else {
+                                append_colored_quad(
+                                    &mut colored_tiles,
+                                    corners,
+                                    tile_type_color(tile_data.tile_type, &definitions_by_id),
+                                );
                             }
-                            mesh.add_triangle(first, first + 1, first + 2);
-                            mesh.add_triangle(first, first + 2, first + 3);
-                        } else {
-                            append_colored_quad(&mut colored_tiles, corners, tile_type_color(tile_data.tile_type, &definitions_by_id));
-                        }
                         }
                     }
                     if !runtime_view && self.selected_tiles.contains(&tile) {
-                        append_colored_quad(&mut selection_mesh, corners, Color32::from_rgba_unmultiplied(70, 150, 255, 34));
-                        append_diamond_outline(&mut selection_mesh, corners, 2.0, self.options.selection_color);
+                        append_colored_quad(
+                            &mut selection_mesh,
+                            corners,
+                            Color32::from_rgba_unmultiplied(70, 150, 255, 34),
+                        );
+                        append_diamond_outline(
+                            &mut selection_mesh,
+                            corners,
+                            2.0,
+                            self.options.selection_color,
+                        );
                     }
                 }
 
@@ -786,13 +1078,23 @@ impl SceneView {
             }
         }
 
-        if !colored_tiles.is_empty() { painter.add(egui::Shape::mesh(colored_tiles)); }
-        for mesh in textured_tiles.into_values() {
-            if !mesh.is_empty() { painter.add(egui::Shape::mesh(mesh)); }
+        if !colored_tiles.is_empty() {
+            painter.add(egui::Shape::mesh(colored_tiles));
         }
-        if !selection_mesh.is_empty() { painter.add(egui::Shape::mesh(selection_mesh)); }
-        if !hover_mesh.is_empty() { painter.add(egui::Shape::mesh(hover_mesh)); }
-        if !grid_mesh.is_empty() { painter.add(egui::Shape::mesh(grid_mesh)); }
+        for mesh in textured_tiles.into_values() {
+            if !mesh.is_empty() {
+                painter.add(egui::Shape::mesh(mesh));
+            }
+        }
+        if !selection_mesh.is_empty() {
+            painter.add(egui::Shape::mesh(selection_mesh));
+        }
+        if !hover_mesh.is_empty() {
+            painter.add(egui::Shape::mesh(hover_mesh));
+        }
+        if !grid_mesh.is_empty() {
+            painter.add(egui::Shape::mesh(grid_mesh));
+        }
     }
 
     /// Dessine les objets de la scène (placeholder rectangulaire coloré).
@@ -820,7 +1122,9 @@ impl SceneView {
 
         for chunk_y in min_chunk_y..=max_chunk_y {
             for chunk_x in min_chunk_x..=max_chunk_x {
-                let Some(chunk) = scene.grid.chunks.get(&(chunk_x, chunk_y)) else { continue };
+                let Some(chunk) = scene.grid.chunks.get(&(chunk_x, chunk_y)) else {
+                    continue;
+                };
                 let chunk_center = TilePos::new(
                     chunk_x * chunk_size + chunk_size / 2,
                     chunk_y * chunk_size + chunk_size / 2,
@@ -836,11 +1140,19 @@ impl SceneView {
                         screen.y + half_height * chunk_size as f32,
                     ),
                 );
-                if !bounds.intersects(rect) { continue; }
+                if !bounds.intersects(rect) {
+                    continue;
+                }
 
                 for (index, data) in chunk.tiles.iter().copied().enumerate() {
-                    if data.is_empty() { continue; }
-                    if runtime_view && definitions_by_id.get(&data.tile_type).is_some_and(|definition| definition.editor_only) {
+                    if data.is_empty() {
+                        continue;
+                    }
+                    if runtime_view
+                        && definitions_by_id
+                            .get(&data.tile_type)
+                            .is_some_and(|definition| definition.editor_only)
+                    {
                         continue;
                     }
                     let tile = TilePos::new(
@@ -852,7 +1164,9 @@ impl SceneView {
                         egui::pos2(screen.x - half_width, screen.y - half_height),
                         egui::pos2(screen.x + half_width, screen.y + half_height),
                     );
-                    if !tile_bounds.intersects(rect) { continue; }
+                    if !tile_bounds.intersects(rect) {
+                        continue;
+                    }
 
                     let color = tile_type_color(data.tile_type, definitions_by_id);
                     let first = mesh.vertices.len() as u32;
@@ -883,7 +1197,9 @@ impl SceneView {
     ) {
         let zoom = self.camera.zoom;
         self.object_hit_rects.clear();
-        let moving_objects: HashSet<ObjectId> = self.move_objects.iter().map(|(id, _)| *id).collect();
+        self.object_hit_diamonds.clear();
+        let moving_objects: HashSet<ObjectId> =
+            self.move_objects.iter().map(|(id, _)| *id).collect();
         for obj in scene.objects_sorted_for_render() {
             if obj.object_type == ObjectType::Camera {
                 if show_cameras && !obj.hidden {
@@ -903,16 +1219,30 @@ impl SceneView {
                             Color32::from_rgb(105, 125, 145)
                         };
                         painter.rect_filled(icon_rect, 2.0, color);
-                        painter.rect_stroke(icon_rect, 2.0, Stroke::new(
-                            if selected { 2.0_f32 } else { 1.0_f32 },
-                            if selected { self.options.selection_color } else { Color32::WHITE },
-                        ));
-                        painter.circle_stroke(icon_rect.center(), icon_size * 0.22,
-                            Stroke::new(1.5_f32, Color32::WHITE));
-                        painter.line_segment([
-                            egui::pos2(icon_rect.left() + icon_size * 0.2, icon_rect.bottom()),
-                            egui::pos2(icon_rect.left(), icon_rect.bottom() + icon_size * 0.2),
-                        ], Stroke::new(1.0_f32, color));
+                        painter.rect_stroke(
+                            icon_rect,
+                            2.0,
+                            Stroke::new(
+                                if selected { 2.0_f32 } else { 1.0_f32 },
+                                if selected {
+                                    self.options.selection_color
+                                } else {
+                                    Color32::WHITE
+                                },
+                            ),
+                        );
+                        painter.circle_stroke(
+                            icon_rect.center(),
+                            icon_size * 0.22,
+                            Stroke::new(1.5_f32, Color32::WHITE),
+                        );
+                        painter.line_segment(
+                            [
+                                egui::pos2(icon_rect.left() + icon_size * 0.2, icon_rect.bottom()),
+                                egui::pos2(icon_rect.left(), icon_rect.bottom() + icon_size * 0.2),
+                            ],
+                            Stroke::new(1.0_f32, color),
+                        );
                     }
                 }
                 continue;
@@ -924,24 +1254,35 @@ impl SceneView {
                 continue;
             }
             let screen = self.tile_to_screen(obj.tile_pos, proj, center);
-            let texture_path = obj.asset_path.as_deref().filter(|path| !path.is_empty())
-                .or_else(|| obj.properties.get("texture").and_then(|value| value.as_str()).filter(|path| !path.is_empty()));
+            let texture_path = obj
+                .asset_path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+                .or_else(|| {
+                    obj.properties
+                        .get("texture")
+                        .and_then(|value| value.as_str())
+                        .filter(|path| !path.is_empty())
+                });
             let texture = texture_path.and_then(|path| self.load_texture(ctx, asset_root, path));
             let size = Vec2::new(proj.tile_width * zoom, proj.tile_height * zoom);
-            let tile_rect = Rect::from_min_size(
-                egui::pos2(screen.x - size.x * 0.5, screen.y - size.y),
-                size,
-            );
+            let tile_rect =
+                Rect::from_min_size(egui::pos2(screen.x - size.x * 0.5, screen.y - size.y), size);
             let texture_id = texture.as_ref().map(|(texture_id, _)| *texture_id);
             let r = match (texture.as_ref(), obj.fit_texture_to_diamond) {
                 (Some((_, texture_size)), false) => contain_rect(tile_rect, *texture_size),
                 _ => tile_rect,
             };
             self.object_hit_rects.insert(obj.id, r);
-            if !r.intersects(viewport) { continue; }
+            if texture_id.is_some() && obj.fit_texture_to_diamond {
+                self.object_hit_diamonds.insert(obj.id);
+            }
+            if !r.intersects(viewport) {
+                continue;
+            }
 
-            let selected = self.selected_object == Some(obj.id)
-                || self.selected_objects.contains(&obj.id);
+            let selected =
+                self.selected_object == Some(obj.id) || self.selected_objects.contains(&obj.id);
             let size = r.size();
             if let Some(texture_id) = texture_id {
                 if obj.fit_texture_to_diamond {
@@ -987,7 +1328,11 @@ impl SceneView {
                         Color32::WHITE,
                     );
                     if selected {
-                        painter.rect_stroke(r, 0.0, Stroke::new(2.0_f32, self.options.selection_color));
+                        painter.rect_stroke(
+                            r,
+                            0.0,
+                            Stroke::new(2.0_f32, self.options.selection_color),
+                        );
                     }
                 }
             } else {
@@ -1009,7 +1354,10 @@ impl SceneView {
             };
             if texture_id.is_none() {
                 painter.line_segment(
-                    [r.center(), r.center() + direction * (size.y.min(size.x) * 0.28)],
+                    [
+                        r.center(),
+                        r.center() + direction * (size.y.min(size.x) * 0.28),
+                    ],
                     Stroke::new(2.0_f32, Color32::WHITE),
                 );
             }
@@ -1036,16 +1384,25 @@ impl SceneView {
         let cache_key = format!("{}|{}", asset_root.display(), asset_path);
         if !self.texture_cache.contains_key(&cache_key) {
             let path = Path::new(asset_path);
-            let path = if path.is_absolute() { path.to_owned() } else { asset_root.join(path) };
+            let path = if path.is_absolute() {
+                path.to_owned()
+            } else {
+                asset_root.join(path)
+            };
             let texture = image::open(path).ok().map(|image| {
                 let rgba = image.into_rgba8();
                 let size = [rgba.width() as usize, rgba.height() as usize];
                 let color_image = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-                ctx.load_texture(cache_key.clone(), color_image, egui::TextureOptions::NEAREST)
+                ctx.load_texture(
+                    cache_key.clone(),
+                    color_image,
+                    egui::TextureOptions::NEAREST,
+                )
             });
             self.texture_cache.insert(cache_key.clone(), texture);
         }
-        self.texture_cache.get(&cache_key)
+        self.texture_cache
+            .get(&cache_key)
             .and_then(Option::as_ref)
             .map(|texture| (texture.id(), texture.size_vec2()))
     }
@@ -1057,11 +1414,18 @@ impl SceneView {
         asset_path: &str,
     ) -> Option<egui::TextureId> {
         let path = Path::new(asset_path);
-        if path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("gif")) {
+        if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("gif"))
+        {
             let cache_key = format!("{}|{}", asset_root.display(), asset_path);
-            return self.animated_tile_textures.get(&cache_key).map(|animation| animation.texture.id());
+            return self
+                .animated_tile_textures
+                .get(&cache_key)
+                .map(|animation| animation.texture.id());
         }
-        self.load_texture(ctx, asset_root, asset_path).map(|(id, _)| id)
+        self.load_texture(ctx, asset_root, asset_path)
+            .map(|(id, _)| id)
     }
 
     fn update_animated_tile_textures(
@@ -1071,17 +1435,28 @@ impl SceneView {
         definitions: &[TileDefinition],
         delta_time: f32,
     ) {
-        for path in definitions.iter().filter_map(|definition| definition.texture.as_deref()) {
+        for path in definitions
+            .iter()
+            .filter_map(|definition| definition.texture.as_deref())
+        {
             let relative = Path::new(path);
-            if !relative.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("gif")) {
+            if !relative
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("gif"))
+            {
                 continue;
             }
             let cache_key = format!("{}|{}", asset_root.display(), path);
             if self.animated_tile_textures.contains_key(&cache_key)
-                || self.failed_animated_tile_textures.contains(&cache_key) {
+                || self.failed_animated_tile_textures.contains(&cache_key)
+            {
                 continue;
             }
-            let full_path = if relative.is_absolute() { relative.to_owned() } else { asset_root.join(relative) };
+            let full_path = if relative.is_absolute() {
+                relative.to_owned()
+            } else {
+                asset_root.join(relative)
+            };
             if let Some(animation) = load_animated_tile_texture(ctx, &full_path, &cache_key) {
                 self.animated_tile_textures.insert(cache_key, animation);
             } else {
@@ -1093,7 +1468,13 @@ impl SceneView {
         }
     }
 
-    fn draw_move_preview(&self, scene: &Scene, painter: &Painter, proj: &IsoProjection, center: Vec2) {
+    fn draw_move_preview(
+        &self,
+        scene: &Scene,
+        painter: &Painter,
+        proj: &IsoProjection,
+        center: Vec2,
+    ) {
         let (Some(start), Some(cursor)) = (self.move_start, self.hovered_tile) else {
             return;
         };
@@ -1123,15 +1504,24 @@ impl SceneView {
 
         let object_size = Vec2::new(proj.tile_width * zoom, proj.tile_height * zoom);
         for &(id, original_pos) in &self.move_objects {
-            let Some(object) = scene.get_object(id) else { continue };
-            if object.hidden { continue; }
-            let destination = TilePos::with_z(original_pos.x + dx, original_pos.y + dy, original_pos.z);
+            let Some(object) = scene.get_object(id) else {
+                continue;
+            };
+            if object.hidden {
+                continue;
+            }
+            let destination =
+                TilePos::with_z(original_pos.x + dx, original_pos.y + dy, original_pos.z);
             let screen = self.tile_to_screen(destination, proj, center);
             let rect = Rect::from_min_size(
                 egui::pos2(screen.x - object_size.x * 0.5, screen.y - object_size.y),
                 object_size,
             );
-            painter.rect_filled(rect, 3.0, Color32::from_rgba_unmultiplied(190, 200, 210, 95));
+            painter.rect_filled(
+                rect,
+                3.0,
+                Color32::from_rgba_unmultiplied(190, 200, 210, 95),
+            );
             painter.rect_stroke(rect, 3.0, outline);
             if zoom >= 0.5 {
                 painter.text(
@@ -1146,7 +1536,9 @@ impl SceneView {
     }
 
     fn draw_rotate_preview(&self, painter: &Painter, proj: &IsoProjection, center: Vec2) {
-        let Some(bounds) = self.rotate_bounds else { return };
+        let Some(bounds) = self.rotate_bounds else {
+            return;
+        };
         let steps = self.rotate_steps.rem_euclid(4);
         let zoom = self.camera.zoom;
         let half_width = proj.half_width() * zoom;
@@ -1173,12 +1565,7 @@ impl SceneView {
         );
     }
 
-    fn draw_object_selection_bounds(
-        &self,
-        painter: &Painter,
-        proj: &IsoProjection,
-        center: Vec2,
-    ) {
+    fn draw_object_selection_bounds(&self, painter: &Painter, proj: &IsoProjection, center: Vec2) {
         let (Some(start), Some(end)) = (self.selection_start, self.hovered_tile) else {
             return;
         };
@@ -1205,7 +1592,14 @@ impl SceneView {
         self.logical_to_screen(tile.x as f32, tile.y as f32, tile.z as f32, proj, center)
     }
 
-    fn logical_to_screen(&self, x: f32, y: f32, z: f32, proj: &IsoProjection, center: Vec2) -> egui::Pos2 {
+    fn logical_to_screen(
+        &self,
+        x: f32,
+        y: f32,
+        z: f32,
+        proj: &IsoProjection,
+        center: Vec2,
+    ) -> egui::Pos2 {
         let world = Vec2::new(
             (x - y) * proj.half_width(),
             (x + y) * proj.half_height() - z * proj.tile_height,
@@ -1218,7 +1612,9 @@ impl SceneView {
 
     /// Trouve l'objet de la scène à la position de tuile donnée.
     fn find_object_at(&self, scene: &Scene, tile: TilePos) -> Option<ObjectId> {
-        scene.objects.values()
+        scene
+            .objects
+            .values()
             .find(|o| !o.hidden && o.tile_pos == tile)
             .map(|o| o.id)
     }
@@ -1234,17 +1630,36 @@ impl SceneView {
             proj.tile_width * self.camera.zoom,
             proj.tile_height * self.camera.zoom,
         );
-        scene.objects_sorted_for_render().into_iter().rev().find_map(|object| {
-            if object.hidden { return None; }
-            let bounds = self.object_hit_rects.get(&object.id).copied().unwrap_or_else(|| {
-                let screen = self.tile_to_screen(object.tile_pos, proj, center);
-                Rect::from_min_size(
-                    egui::pos2(screen.x - default_size.x * 0.5, screen.y - default_size.y),
-                    default_size,
-                )
-            });
-            bounds.contains(pointer).then_some(object.id)
-        })
+        scene
+            .objects_sorted_for_render()
+            .into_iter()
+            .rev()
+            .find_map(|object| {
+                if object.hidden {
+                    return None;
+                }
+                let bounds = self
+                    .object_hit_rects
+                    .get(&object.id)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        let screen = self.tile_to_screen(object.tile_pos, proj, center);
+                        Rect::from_min_size(
+                            egui::pos2(screen.x - default_size.x * 0.5, screen.y - default_size.y),
+                            default_size,
+                        )
+                    });
+                let contains = if self.object_hit_diamonds.contains(&object.id) {
+                    let screen = self.tile_to_screen(object.tile_pos, proj, center);
+                    let half_width = (proj.half_width() * self.camera.zoom).max(f32::EPSILON);
+                    let half_height = (proj.half_height() * self.camera.zoom).max(f32::EPSILON);
+                    let offset = pointer - screen;
+                    offset.x.abs() / half_width + offset.y.abs() / half_height <= 1.0
+                } else {
+                    bounds.contains(pointer)
+                };
+                contains.then_some(object.id)
+            })
     }
 }
 
@@ -1277,7 +1692,12 @@ fn load_animated_tile_texture(
     }
     let first = frames.first()?.image.clone();
     let texture = ctx.load_texture(cache_key.to_owned(), first, egui::TextureOptions::NEAREST);
-    Some(AnimatedTileTexture { frames, texture, current_frame: 0, elapsed_seconds: 0.0 })
+    Some(AnimatedTileTexture {
+        frames,
+        texture,
+        current_frame: 0,
+        elapsed_seconds: 0.0,
+    })
 }
 
 fn objects_in_tile_rectangle(scene: &Scene, start: TilePos, end: TilePos) -> HashSet<ObjectId> {
@@ -1285,7 +1705,9 @@ fn objects_in_tile_rectangle(scene: &Scene, start: TilePos, end: TilePos) -> Has
     let max_x = start.x.max(end.x);
     let min_y = start.y.min(end.y);
     let max_y = start.y.max(end.y);
-    scene.objects.values()
+    scene
+        .objects
+        .values()
         .filter(|object| {
             !object.hidden
                 && (min_x..=max_x).contains(&object.tile_pos.x)
@@ -1296,7 +1718,9 @@ fn objects_in_tile_rectangle(scene: &Scene, start: TilePos, end: TilePos) -> Has
 }
 
 fn sole_object(objects: &HashSet<ObjectId>) -> Option<ObjectId> {
-    (objects.len() == 1).then(|| objects.iter().next().copied()).flatten()
+    (objects.len() == 1)
+        .then(|| objects.iter().next().copied())
+        .flatten()
 }
 
 fn contain_rect(bounds: Rect, image_size: Vec2) -> Rect {
@@ -1311,7 +1735,9 @@ fn show_runtime_camera_selector(
     viewport: Rect,
     selected_camera: &mut Option<ObjectId>,
 ) {
-    let mut cameras: Vec<_> = scene.objects.values()
+    let mut cameras: Vec<_> = scene
+        .objects
+        .values()
         .filter(|object| object.object_type == ObjectType::Camera)
         .map(|object| (object.id, object.name.clone()))
         .collect();
@@ -1320,7 +1746,12 @@ fn show_runtime_camera_selector(
         *selected_camera = None;
     }
     let selected_name = selected_camera
-        .and_then(|id| cameras.iter().find(|(camera_id, _)| *camera_id == id).map(|(_, name)| name.as_str()))
+        .and_then(|id| {
+            cameras
+                .iter()
+                .find(|(camera_id, _)| *camera_id == id)
+                .map(|(_, name)| name.as_str())
+        })
         .unwrap_or("Vue libre");
     let position = egui::pos2(viewport.left() + 8.0, viewport.top() + 8.0);
 
@@ -1353,11 +1784,7 @@ fn erase_tile(scene: &mut Scene, tile: TilePos) -> bool {
     true
 }
 
-fn fill_tiles(
-    scene: &mut Scene,
-    tiles: impl IntoIterator<Item = TilePos>,
-    tile_type: u16,
-) -> bool {
+fn fill_tiles(scene: &mut Scene, tiles: impl IntoIterator<Item = TilePos>, tile_type: u16) -> bool {
     let mut modified = false;
     for tile in tiles {
         let old = scene.get_tile(tile);
@@ -1426,10 +1853,17 @@ fn tile_rectangle(start: TilePos, end: TilePos) -> HashSet<TilePos> {
 
 /// Couleur de prévisualisation selon le type de tuile (1-16 définis arbitrairement).
 fn tile_type_color(tile_type: u16, definitions: &HashMap<u16, &TileDefinition>) -> Color32 {
-    definitions.get(&tile_type).copied()
-        .map(|definition| Color32::from_rgba_unmultiplied(
-            definition.color[0], definition.color[1], definition.color[2], definition.color[3],
-        ))
+    definitions
+        .get(&tile_type)
+        .copied()
+        .map(|definition| {
+            Color32::from_rgba_unmultiplied(
+                definition.color[0],
+                definition.color[1],
+                definition.color[2],
+                definition.color[3],
+            )
+        })
         .unwrap_or_else(|| Color32::from_rgb(60, 60, 60))
 }
 
@@ -1442,18 +1876,41 @@ fn append_colored_quad(mesh: &mut egui::Mesh, corners: [egui::Pos2; 4], color: C
     mesh.add_triangle(first, first + 2, first + 3);
 }
 
-fn append_diamond_outline(mesh: &mut egui::Mesh, corners: [egui::Pos2; 4], width: f32, color: Color32) {
+fn append_diamond_outline(
+    mesh: &mut egui::Mesh,
+    corners: [egui::Pos2; 4],
+    width: f32,
+    color: Color32,
+) {
     for index in 0..corners.len() {
-        append_mesh_line(mesh, corners[index], corners[(index + 1) % corners.len()], width, color);
+        append_mesh_line(
+            mesh,
+            corners[index],
+            corners[(index + 1) % corners.len()],
+            width,
+            color,
+        );
     }
 }
 
-fn append_mesh_line(mesh: &mut egui::Mesh, start: egui::Pos2, end: egui::Pos2, width: f32, color: Color32) {
+fn append_mesh_line(
+    mesh: &mut egui::Mesh,
+    start: egui::Pos2,
+    end: egui::Pos2,
+    width: f32,
+    color: Color32,
+) {
     let direction = end - start;
     let length = direction.length();
-    if length <= f32::EPSILON { return; }
+    if length <= f32::EPSILON {
+        return;
+    }
     let normal = egui::vec2(-direction.y, direction.x) * (width * 0.5 / length);
-    append_colored_quad(mesh, [start + normal, end + normal, end - normal, start - normal], color);
+    append_colored_quad(
+        mesh,
+        [start + normal, end + normal, end - normal, start - normal],
+        color,
+    );
 }
 
 fn tile_texture_rotation(tile: TilePos, tile_type: u16) -> usize {
@@ -1475,7 +1932,10 @@ mod tests {
     #[test]
     fn connected_fill_changes_only_four_connected_matching_tiles() {
         let mut scene = Scene::new("Fill component");
-        let matching = TileData { tile_type: 1, decoration: 7 };
+        let matching = TileData {
+            tile_type: 1,
+            decoration: 7,
+        };
         scene.set_tile(TilePos::new(15, 0), matching);
         scene.set_tile(TilePos::new(16, 0), matching); // Across a chunk boundary.
         scene.set_tile(TilePos::new(16, 1), TileData::terrain(2)); // Blocks the route.
@@ -1486,8 +1946,20 @@ mod tests {
         assert_eq!(region.len(), 2);
         assert!(fill_tiles(&mut scene, region, 3));
 
-        assert_eq!(scene.get_tile(TilePos::new(15, 0)), TileData { tile_type: 3, decoration: 7 });
-        assert_eq!(scene.get_tile(TilePos::new(16, 0)), TileData { tile_type: 3, decoration: 7 });
+        assert_eq!(
+            scene.get_tile(TilePos::new(15, 0)),
+            TileData {
+                tile_type: 3,
+                decoration: 7
+            }
+        );
+        assert_eq!(
+            scene.get_tile(TilePos::new(16, 0)),
+            TileData {
+                tile_type: 3,
+                decoration: 7
+            }
+        );
         assert_eq!(scene.get_tile(TilePos::new(16, 1)), TileData::terrain(2));
         assert_eq!(scene.get_tile(TilePos::new(17, 0)), TileData::terrain(2));
         assert_eq!(scene.get_tile(TilePos::new(17, 1)), matching);
@@ -1496,7 +1968,10 @@ mod tests {
     #[test]
     fn connected_fill_on_empty_tile_is_bounded_to_the_clicked_tile() {
         let scene = Scene::new("Empty fill");
-        assert_eq!(connected_tile_region(&scene, TilePos::new(-4, 8)), vec![TilePos::new(-4, 8)]);
+        assert_eq!(
+            connected_tile_region(&scene, TilePos::new(-4, 8)),
+            vec![TilePos::new(-4, 8)]
+        );
     }
 
     #[test]
@@ -1509,29 +1984,50 @@ mod tests {
         let rotations = (-50..50)
             .map(|x| tile_texture_rotation(TilePos::new(x, x * 3), 7))
             .collect::<HashSet<_>>();
-        assert!(rotations.len() >= 3, "les emplacements doivent varier les orientations");
+        assert!(
+            rotations.len() >= 3,
+            "les emplacements doivent varier les orientations"
+        );
     }
 
     #[test]
     fn animated_gif_tile_texture_decodes_frames_and_advances() {
         use image::{codecs::gif::GifEncoder, Delay, Frame, Rgba, RgbaImage};
-        use std::{fs::File, time::{SystemTime, UNIX_EPOCH}};
+        use std::{
+            fs::File,
+            time::{SystemTime, UNIX_EPOCH},
+        };
 
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("isomaker_tile_animation_{}_{}.gif", std::process::id(), nonce));
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "isomaker_tile_animation_{}_{}.gif",
+            std::process::id(),
+            nonce
+        ));
         let frames = [
-            Frame::from_parts(RgbaImage::from_pixel(2, 2, Rgba([255, 0, 0, 255])), 0, 0,
-                Delay::from_numer_denom_ms(40, 1)),
-            Frame::from_parts(RgbaImage::from_pixel(2, 2, Rgba([0, 255, 0, 255])), 0, 0,
-                Delay::from_numer_denom_ms(40, 1)),
+            Frame::from_parts(
+                RgbaImage::from_pixel(2, 2, Rgba([255, 0, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(40, 1),
+            ),
+            Frame::from_parts(
+                RgbaImage::from_pixel(2, 2, Rgba([0, 255, 0, 255])),
+                0,
+                0,
+                Delay::from_numer_denom_ms(40, 1),
+            ),
         ];
         GifEncoder::new(File::create(&path).unwrap())
             .encode_frames(frames)
             .unwrap();
 
         let context = egui::Context::default();
-        let mut animation = load_animated_tile_texture(&context, &path, "test-gif")
-            .expect("GIF animé valide");
+        let mut animation =
+            load_animated_tile_texture(&context, &path, "test-gif").expect("GIF animé valide");
         assert_eq!(animation.frames.len(), 2);
         assert_eq!(animation.current_frame, 0);
         animation.advance(0.05);

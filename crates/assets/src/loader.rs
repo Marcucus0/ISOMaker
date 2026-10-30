@@ -1,8 +1,8 @@
 //! Chargement des ressources depuis le disque.
 
-use std::path::Path;
 use anyhow::Result;
 use image::DynamicImage;
+use std::path::Path;
 
 /// Charge une image PNG/JPEG depuis le disque.
 pub fn load_image(path: &Path) -> Result<DynamicImage> {
@@ -14,9 +14,11 @@ pub fn load_image(path: &Path) -> Result<DynamicImage> {
 /// Valide qu'un chemin de ressource est sûr (pas de traversal).
 pub fn validate_asset_path(base: &Path, rel: &Path) -> Result<std::path::PathBuf> {
     let candidate = base.join(rel);
-    let canonical = candidate.canonicalize()
+    let canonical = candidate
+        .canonicalize()
         .map_err(|e| anyhow::anyhow!("Chemin invalide `{}` : {}", rel.display(), e))?;
-    let base_canonical = base.canonicalize()
+    let base_canonical = base
+        .canonicalize()
         .map_err(|e| anyhow::anyhow!("Dossier de base invalide : {e}"))?;
     if !canonical.starts_with(&base_canonical) {
         anyhow::bail!(
@@ -30,21 +32,34 @@ pub fn validate_asset_path(base: &Path, rel: &Path) -> Result<std::path::PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     struct TempTree(PathBuf);
 
     impl TempTree {
         fn new() -> Self {
-            let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-            let root = std::env::temp_dir().join(format!("isomaker_asset_path_{}_{}", std::process::id(), nonce));
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "isomaker_asset_path_{}_{}",
+                std::process::id(),
+                nonce
+            ));
             fs::create_dir_all(&root).unwrap();
             Self(root)
         }
     }
 
     impl Drop for TempTree {
-        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
     }
 
     #[test]

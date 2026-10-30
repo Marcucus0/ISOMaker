@@ -99,6 +99,11 @@ premier UUID dans l'ordre lexical est retourné. `GameObject` expose `id`,
 champs de l'inspecteur. `get_property(key)` lit aussi une propriété
 personnalisée.
 
+Dans un script attaché à un objet, `game.get_self_object()` retourne l'objet
+porteur du script en lecture seule. `game.require_object(nom)` effectue une
+recherche exacte comme `find_object`, mais lève une erreur claire si l'objet
+n'existe pas ; utilise `find_object` lorsque son absence est normale.
+
 Par exemple, le script du personnage peut déplacer la caméra nommée « Caméra »
 à la position du personnage sans coder l'UUID de la caméra :
 
@@ -113,6 +118,88 @@ La lecture retourne un instantané des objets au début du callback. Les
 commandes de déplacement émises par les scripts sont appliquées après les
 callbacks ; un script voit donc les modifications des callbacks précédents au
 prochain appel.
+
+`game.get_scene(name)` retourne un instantané `GameScene` en lecture seule, ou
+`None` si le nom exact ne correspond à aucune scène du projet. L'accès marche
+même si la scène n'est pas active et ne l'active pas. `GameScene` expose `name`,
+`objects`, `find_object(name)` et `get_object(uuid)`.
+
+```python
+def _on_game_launch(game: GameContext) -> None:
+    main = game.get_scene("Main")
+    if main is None:
+        game.log_error("La scène Main est introuvable")
+        return
+
+    personnage = main.find_object("Personage")
+    if personnage is not None:
+        game.log(f"Personnage dans Main : ({personnage.x}, {personnage.y}, {personnage.z})")
+```
+
+Les objets retournés sont des instantanés : pour modifier un objet, utilisez
+les commandes `game.*` prévues à cet effet.
+
+`game.get_distance(object1, object2)` calcule la distance euclidienne sur le
+plan X/Y, en unités de tuile. La coordonnée Z est ignorée ; utilise deux objets
+de la même scène pour obtenir une distance significative.
+
+```python
+personnage = game.find_object("Personage")
+coffre = game.find_object("Coffre")
+if personnage is not None and coffre is not None:
+    distance = game.get_distance(personnage, coffre)
+    if distance <= 2.0:
+        game.log("Le coffre est à portée")
+```
+
+### Texte d'interface (HUD)
+
+`game.ui.set_text(id, text, ...)` crée ou remplace un texte affiché au-dessus
+de la scène en Lecture. Les méthodes `update_text`, `update_position`,
+`update_anchor`, `update_font_size` et `update_color` modifient chacune un seul
+paramètre d'un texte existant, sans changer les autres. Un identifiant absent
+est ignoré ; utilise `set_text` pour créer l'élément. `game.ui.remove_text(id)`
+le retire. Les identifiants
+sont globaux au HUD et doivent être uniques. Le texte n'est pas affecté par la
+caméra et reste ancré au viewport quand sa taille change.
+
+```python
+def _on_game_launch(game: GameContext) -> None:
+    game.ui.set_text(
+        "score",
+        "Score : 0",
+        x=24,
+        y=20,
+        anchor=game.ui_anchor.TOP_LEFT,
+        font_size=24,
+        color=(255, 255, 255, 255),
+    )
+
+
+def _on_click(game: GameContext) -> None:
+    game.ui.set_text("message", "Coffre ouvert !", x=-24, y=-24,
+                     anchor=game.ui_anchor.BOTTOM_RIGHT)
+
+
+def actualiser_score(game: GameContext, score: int) -> None:
+    game.ui.update_text("score", f"Score : {score}")
+    game.ui.update_position("score", 24, 20)
+    game.ui.update_anchor("score", game.ui_anchor.TOP_LEFT)
+    game.ui.update_font_size("score", 28)
+    game.ui.update_color("score", (255, 220, 80, 255))
+```
+
+Les neuf ancres sont disponibles via `game.ui_anchor` : `TOP_LEFT`,
+`TOP_CENTER`, `TOP_RIGHT`, `CENTER_LEFT`, `CENTER`, `CENTER_RIGHT`,
+`BOTTOM_LEFT`, `BOTTOM_CENTER` et `BOTTOM_RIGHT`. `x` et `y` sont des décalages
+en points d'interface, positifs vers la droite et le bas ; près des bords droit
+ou bas, utilise des valeurs négatives pour rentrer le texte dans le viewport.
+La taille de police est bornée entre 6 et 128 points. `color` est un tuple RGBA
+de quatre entiers entre 0 et 255, blanc par défaut.
+
+Le HUD est global pendant la session, visible en Lecture et en Pause, et effacé
+au Stop. Il n'est pas enregistré dans le fichier projet et les textes ne sont
+pas interactifs dans cette première version.
 
 ### Propriétés d'un objet
 
@@ -202,6 +289,22 @@ Les scripts d'objet n'ont pas encore de hook d'arrêt dédié.
 
 ### Zones et événements de contact
 
+En mode Lecture, un clic gauche sur l'image visible d'un objet appelle
+`_on_click(game)` dans le script attaché à cet objet. Les commandes Python
+émises par le callback (déplacer, supprimer, modifier une propriété, etc.) sont
+appliquées après son retour. Un clic dans le vide ou sur un objet sans script
+ne déclenche rien.
+
+```python
+def _on_click(game: GameContext) -> None:
+    """Appelé quand le joueur clique sur cet objet en Lecture."""
+    game.log(f"{game.name} cliqué")
+    game.set_self_property("hidden", True)
+```
+
+Le callback ne se déclenche qu'une fois par clic ; il n'est pas répété pendant
+que le bouton reste enfoncé. Il n'est pas appelé dans l'éditeur.
+
 Un objet dont le script définit au moins un hook de zone agit comme une zone
 rectangulaire. Son empreinte, réglable dans **Inspecteur → Transformation**,
 définit sa taille en tuiles. Les objets qui la recouvrent au même étage
@@ -284,7 +387,8 @@ def _on_area_entered(game: GameContext, other: GameObject) -> None:
 | `game.destroy(object_id)` | Demande la suppression de l'objet portant cet UUID. |
 | `game.move_object(object_id, x, y)` | Demande le déplacement d'un objet existant. |
 | `game.set_property(object_id, key, value)` | Modifie un champ d'objet éditable ou une propriété personnalisée. |
-| `game.set_global(key, value)` | Émet une commande de valeur globale ; actuellement l'éditeur l'inscrit dans le journal, sans fournir de stockage/lecture de variables globales. |
+| `game.set_global(key, value)` | Définit immédiatement une valeur partagée pendant la session. |
+| `game.get_global(key)` | Lit une valeur partagée, ou renvoie `None` si la clé n'existe pas. |
 | `game.load_scene(name)` | Charge la scène de nom exact et empile la scène précédente. |
 | `game.unload_scene()` | Quitte la scène courante et revient à la scène précédente de la pile. |
 | `game.log(message)` | Écrit un message d'information dans le journal de l'éditeur, préfixé par le fichier script et le nom de l'objet si disponible. |
@@ -333,13 +437,14 @@ Tout autre texte devient le nom d'un type personnalisé. Ces fonctions renvoient
 `destroy`, `move_object` et `set_property` attendent l'UUID texte d'un objet
 existant.
 
-Les valeurs acceptées par `set_property` et `set_global` sont `None`, un
-booléen, un entier, un nombre décimal, une chaîne, une liste ou un dictionnaire
-dont les clés sont des chaînes. Les listes peuvent contenir ces mêmes valeurs.
-À l'application, `None` devient une chaîne vide pour une propriété, et un
-dictionnaire affecté à une propriété devient actuellement la chaîne
-`"[object]"` : évite les dictionnaires avec `set_property`. `set_global` garde
-la valeur JSON dans la commande, mais l'éditeur ne la stocke pas encore.
+Les valeurs acceptées par `set_property`, `set_global` sont `None`, un booléen,
+un entier, un nombre décimal, une chaîne, une liste ou un dictionnaire dont les
+clés sont des chaînes. `set_global` et `get_global` partagent immédiatement ces
+valeurs entre le script du monde et tous les scripts d'objet pendant la session.
+Une clé absente renvoie `None`. Les valeurs globales sont réinitialisées quand
+la lecture s'arrête ; elles ne sont pas enregistrées dans le projet.
+Pour les propriétés d'objet, `None` devient une chaîne vide et les dictionnaires
+deviennent la chaîne `"[object]"` : évite les dictionnaires avec `set_property`.
 
 `game.find_object(name)` recherche un objet par son nom et
 `game.get_object(object_id)` le récupère par UUID. Ces appels renvoient un
@@ -348,9 +453,9 @@ L'UUID créé par `spawn` n'est toutefois pas encore renvoyé : pour modifier ou
 supprimer un objet précis depuis un script, il faut donc déjà connaître son UUID
 ou le retrouver par son nom.
 
-Les fonctions ajoutent des commandes à une file. Le moteur applique cette file
-après le retour du callback Python ; le script ne modifie donc pas directement
-la scène Rust pendant son exécution.
+Les commandes de scène sont ajoutées à une file et appliquées après le retour
+du callback Python. Les valeurs globales, elles, sont partagées immédiatement
+entre callbacks.
 
 ### Fréquence des logs
 
@@ -390,7 +495,7 @@ def _on_game_launch(game):
     elapsed = 0.0
 
     game.log("La partie démarre")
-    game.set_global("money", 10000)
+    game.set_global("score", 0)
     game.spawn("Maison", "Building", 3, 2)
 
 
@@ -403,9 +508,15 @@ def _on_update(game, delta_time):
         elapsed = 0.0
 ```
 
-Dans cet exemple, `set_global` sert pour l'instant à émettre une commande
-visible dans les logs de débogage ; il ne crée pas encore un état global que le
-script pourrait relire.
+Le script du coffre peut ensuite lire et modifier ce score :
+
+```python
+def _on_click(game: GameContext) -> None:
+    score = game.get_global("score")
+    if score is None:
+        score = 0
+    game.set_global("score", score + 10)
+```
 
 ## Compatibilité et limites actuelles
 
@@ -415,6 +526,6 @@ menu **Monde** utilise les hooks préfixés par `_on_` ci-dessus. Les exceptions
 Python sont remontées dans le journal de l'éditeur avec le chemin et le nom du
 hook.
 
-L'API fournit des instantanés en lecture seule des objets et de leurs champs, mais pas la lecture/écriture de variables globales, les entrées souris ni les événements génériques hors des zones. Les zones disposent des hooks décrits plus haut. `spawn` ne renvoie pas l'identifiant créé. L'API ne constitue
+L'API fournit des instantanés en lecture seule des objets et de leurs champs ainsi qu'un stockage de variables partagé pendant la session, mais pas les entrées souris ni les événements génériques hors des zones. Les zones disposent des hooks décrits plus haut. `spawn` ne renvoie pas l'identifiant créé. L'API ne constitue
 pas une sandbox :
 les scripts chargés sont du code Python de confiance.

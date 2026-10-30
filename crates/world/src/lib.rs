@@ -10,16 +10,16 @@ pub mod coords;
 pub mod grid;
 pub mod layer;
 pub mod object;
-pub mod scene;
 pub mod project;
+pub mod scene;
 
-pub use coords::{TilePos, ScreenPos, IsoProjection};
-pub use grid::TileGrid;
+pub use coords::{IsoProjection, ScreenPos, TilePos};
 pub use grid::TileDefinition;
+pub use grid::TileGrid;
 pub use layer::Layer;
 pub use object::{
-    CustomObjectTypeDefinition, CustomPropertyDefinition, CustomPropertyKind, ObjectId,
-    ObjectTypeDefaults, PropValue, SceneObject, ObjectType, Rotation4,
+    CustomObjectTypeDefinition, CustomPropertyDefinition, CustomPropertyKind, ObjectId, ObjectType,
+    ObjectTypeDefaults, PropValue, Rotation4, SceneObject,
 };
-pub use scene::Scene;
 pub use project::{Project, World};
+pub use scene::Scene;

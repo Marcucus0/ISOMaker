@@ -1,8 +1,8 @@
 //! Registre de ressources : stockage central.
 
+use crate::handle::{AssetId, Handle};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use crate::handle::{AssetId, Handle};
 
 /// Entrée dans le registre.
 #[derive(Debug)]
@@ -31,7 +31,9 @@ impl<T> Default for AssetRegistry<T> {
 }
 
 impl<T> AssetRegistry<T> {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Enregistre un chemin et retourne un handle (pas encore chargé).
     pub fn register(&mut self, path: impl AsRef<Path>) -> Handle<T> {
@@ -40,11 +42,14 @@ impl<T> AssetRegistry<T> {
             return Handle::new(id);
         }
         let id = AssetId::new();
-        self.entries.insert(id, AssetEntry {
+        self.entries.insert(
             id,
-            source_path: path.clone(),
-            data: None,
-        });
+            AssetEntry {
+                id,
+                source_path: path.clone(),
+                data: None,
+            },
+        );
         self.path_index.insert(path, id);
         Handle::new(id)
     }
@@ -69,13 +74,16 @@ impl<T> AssetRegistry<T> {
     }
 
     pub fn is_loaded(&self, handle: Handle<T>) -> bool {
-        self.entries.get(&handle.id)
+        self.entries
+            .get(&handle.id)
             .map(|e| e.data.is_some())
             .unwrap_or(false)
     }
 
     pub fn source_path(&self, handle: Handle<T>) -> Option<&Path> {
-        self.entries.get(&handle.id).map(|e| e.source_path.as_path())
+        self.entries
+            .get(&handle.id)
+            .map(|e| e.source_path.as_path())
     }
 }
 
@@ -89,13 +97,22 @@ mod tests {
         let first_id = registry.register("assets/terrain.png").id;
         let duplicate_id = registry.register("assets/terrain.png").id;
         assert_eq!(first_id, duplicate_id);
-        assert_eq!(registry.source_path(Handle::new(first_id)), Some(Path::new("assets/terrain.png")));
+        assert_eq!(
+            registry.source_path(Handle::new(first_id)),
+            Some(Path::new("assets/terrain.png"))
+        );
         assert!(!registry.is_loaded(Handle::new(first_id)));
 
         registry.store(Handle::new(first_id), "decoded image".to_owned());
-        assert_eq!(registry.get(Handle::new(duplicate_id)).map(String::as_str), Some("decoded image"));
+        assert_eq!(
+            registry.get(Handle::new(duplicate_id)).map(String::as_str),
+            Some("decoded image")
+        );
         registry.evict(Handle::new(first_id));
         assert!(!registry.is_loaded(Handle::new(first_id)));
-        assert_eq!(registry.source_path(Handle::new(first_id)), Some(Path::new("assets/terrain.png")));
+        assert_eq!(
+            registry.source_path(Handle::new(first_id)),
+            Some(Path::new("assets/terrain.png"))
+        );
     }
 }

@@ -104,6 +104,63 @@ class GameObject:
         ...
 
 
+class GameScene:
+    """Instantané en lecture seule d'une scène du projet."""
+
+    name: str
+    objects: list[GameObject]
+
+    def get_object(self, object_id: str) -> GameObject | None:
+        """Récupère un objet par UUID dans cette scène."""
+        ...
+
+    def find_object(self, name: str) -> GameObject | None:
+        """Trouve le premier objet dont le nom correspond exactement."""
+        ...
+
+
+class UIAnchor:
+    """Ancre servant à positionner un élément du HUD dans le viewport."""
+    ...
+
+
+class UIAnchorSet:
+    TOP_LEFT: UIAnchor
+    TOP_CENTER: UIAnchor
+    TOP_RIGHT: UIAnchor
+    CENTER_LEFT: UIAnchor
+    CENTER: UIAnchor
+    CENTER_RIGHT: UIAnchor
+    BOTTOM_LEFT: UIAnchor
+    BOTTOM_CENTER: UIAnchor
+    BOTTOM_RIGHT: UIAnchor
+
+
+class GameUI:
+    def set_text(
+        self,
+        id: str,
+        text: str,
+        x: float = 0.0,
+        y: float = 0.0,
+        anchor: UIAnchor | None = None,
+        font_size: float = 24.0,
+        color: tuple[int, int, int, int] | None = None,
+    ) -> None:
+        """Crée ou met à jour un texte HUD (couleur RGBA, blanc par défaut)."""
+        ...
+
+    def update_text(self, id: str, text: str) -> None: ...
+    def update_position(self, id: str, x: float, y: float) -> None: ...
+    def update_anchor(self, id: str, anchor: UIAnchor) -> None: ...
+    def update_font_size(self, id: str, font_size: float) -> None: ...
+    def update_color(self, id: str, color: tuple[int, int, int, int]) -> None: ...
+
+    def remove_text(self, id: str) -> None:
+        """Supprime un texte HUD."""
+        ...
+
+
 class GameContext:
     """
     Contexte transmis aux hooks du monde et aux scripts attachés aux objets.
@@ -114,6 +171,16 @@ class GameContext:
     @property
     def delta_time(self) -> float:
         """Temps écoulé depuis le dernier frame, en secondes."""
+        ...
+
+    @property
+    def ui(self) -> GameUI:
+        """API des textes HUD du jeu."""
+        ...
+
+    @property
+    def ui_anchor(self) -> UIAnchorSet:
+        """Ancres disponibles pour positionner un élément HUD."""
         ...
 
     @property
@@ -241,6 +308,24 @@ class GameContext:
         """Trouve le premier objet de nom exact, ou None si absent."""
         ...
 
+    def get_self_object(self) -> GameObject:
+        """Retourne l'objet portant ce script ; erreur si le script est celui du monde."""
+        ...
+
+    def require_object(self, name: str) -> GameObject:
+        """Trouve l'objet par nom exact, ou lève une erreur s'il est absent."""
+        ...
+
+    def get_distance(self, object1: GameObject, object2: GameObject) -> float:
+        """Distance euclidienne 2D en tuiles ; la coordonnée Z est ignorée."""
+        ...
+
+    def get_scene(self, name: str) -> GameScene | None:
+        """Récupère une scène par son nom exact, sans l'activer."""
+        ...
+
+    # Événement disponible en Lecture :
+    # def _on_click(game: GameContext) -> None: ...
     # Hooks disponibles sur le script d'un objet qui sert de zone :
     # def _on_area_entered(game: GameContext, other: GameObject) -> None: ...
     # def _on_area_stayed(game: GameContext, other: GameObject) -> None: ...
@@ -298,12 +383,16 @@ class GameContext:
 
     def set_global(self, key: str, value: Any) -> None:
         """
-        Définit une valeur dans l'état global du jeu.
+        Définit immédiatement une valeur partagée pendant la session de jeu.
 
         Args:
             key: Clé de la valeur.
             value: Valeur (types de base Python uniquement).
         """
+        ...
+
+    def get_global(self, key: str) -> Any:
+        """Lit une valeur partagée, ou None si la clé n'existe pas."""
         ...
 
     def load_scene(self, name: str) -> None:

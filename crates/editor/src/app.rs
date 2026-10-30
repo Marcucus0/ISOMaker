@@ -5,24 +5,27 @@
 //! - L'état global de l'éditeur
 //! - Le dispatch des actions vers la scène et le runtime de scripts
 
-use egui::Context;
-use engine::game_loop::{EngineMode, GameLoop};
-use engine::InputState;
-use serde::{Deserialize, Serialize};
-use scripting::{ScriptRuntime, GameCommand};
-use std::collections::{HashSet, VecDeque};
-use std::sync::mpsc::{Receiver, TryRecvError};
-use world::{
-    object::{CustomObjectTypeDefinition, CustomPropertyKind, ObjectId, ObjectType, PropValue, SceneObject},
-    project::Project,
-    scene::Scene,
-    coords::TilePos,
-};
 use crate::{
     inspector::Inspector,
     panels::{LeftPanel, PanelAction},
     scene_view::SceneView,
     toolbar::Toolbar,
+};
+use egui::Context;
+use engine::game_loop::{EngineMode, GameLoop};
+use engine::InputState;
+use scripting::{GameCommand, ScriptRuntime};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::mpsc::{Receiver, TryRecvError};
+use world::{
+    coords::TilePos,
+    object::{
+        CustomObjectTypeDefinition, CustomPropertyKind, ObjectId, ObjectType, PropValue,
+        SceneObject,
+    },
+    project::Project,
+    scene::Scene,
 };
 
 /// État persistant de l'éditeur entre les frames.
@@ -43,6 +46,7 @@ pub struct EditorState {
     scene_stack: Vec<usize>,
     /// Paires zone/objet qui se chevauchaient lors de la dernière frame.
     area_overlaps: HashSet<(ObjectId, ObjectId)>,
+    hud_texts: HashMap<String, scripting::command::HudText>,
     /// Messages de log accumulés.
     pub log_messages: VecDeque<LogEntry>,
     /// Historique des états de scène pour annuler/rétablir les éditions.
@@ -79,6 +83,7 @@ impl EditorState {
             scene_snapshot: None,
             scene_stack: Vec::new(),
             area_overlaps: HashSet::new(),
+            hud_texts: HashMap::new(),
             log_messages: VecDeque::new(),
             undo_history: Vec::new(),
             redo_history: Vec::new(),
@@ -88,7 +93,13 @@ impl EditorState {
 
     pub fn add_scene(&mut self) -> usize {
         let mut number = 1;
-        while self.project.world.scenes.iter().any(|scene| scene.meta.name == format!("Scène {number}")) {
+        while self
+            .project
+            .world
+            .scenes
+            .iter()
+            .any(|scene| scene.meta.name == format!("Scène {number}"))
+        {
             number += 1;
         }
         self.project.world.add_scene(format!("Scène {number}"))
@@ -100,6 +111,18 @@ impl EditorState {
 
     pub fn active_scene_mut(&mut self) -> &mut Scene {
         self.project.world.active_scene_mut()
+    }
+
+    fn refresh_script_scenes(&mut self) {
+        let scenes = self.project.world.scenes.iter().map(|scene| {
+            let mut objects = scene.objects.values().cloned().collect::<Vec<_>>();
+            objects.sort_by_key(|object| object.id.to_string());
+            scripting::api::SceneSnapshot {
+                name: scene.meta.name.clone(),
+                objects,
+            }
+        }).collect();
+        self.script_runtime.set_scenes(scenes);
     }
 
     pub fn select_scene(&mut self, index: usize) -> bool {
@@ -115,11 +138,19 @@ impl EditorState {
     }
 
     fn load_scene_by_name(&mut self, name: &str) -> Result<bool, String> {
-        let Some(index) = self.project.world.scenes.iter().position(|scene| scene.meta.name == name) else {
+        let Some(index) = self
+            .project
+            .world
+            .scenes
+            .iter()
+            .position(|scene| scene.meta.name == name)
+        else {
             return Err(format!("Aucune scène ne porte le nom « {name} »."));
         };
         let current = self.project.world.active_scene_index;
-        if current == index { return Ok(false); }
+        if current == index {
+            return Ok(false);
+        }
         self.scene_stack.push(current);
         self.project.world.active_scene_index = index;
         self.selected = None;
@@ -151,40 +182,59 @@ impl EditorState {
             if self.project.world.main_scene_index < self.project.world.scenes.len() {
                 self.project.world.active_scene_index = self.project.world.main_scene_index;
             }
+            self.refresh_script_scenes();
             self.scene_stack.clear();
             match self.script_runtime.call_start() {
                 Ok(cmds) => self.apply_commands(cmds),
                 Err(e) => self.push_log(log::Level::Error, format!("on_start : {e}")),
             }
-            let objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
+            let objects = self
+                .active_scene()
+                .objects
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
             match self.script_runtime.call_world_launch(&objects) {
                 Ok(cmds) => self.apply_commands(cmds),
                 Err(e) => self.push_log(log::Level::Error, format!("_on_game_launch : {e}")),
             }
-            let objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
+            let objects = self
+                .active_scene()
+                .objects
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
             match self.script_runtime.call_object_launch(&objects) {
                 Ok(cmds) => self.apply_commands(cmds),
-                Err(e) => self.push_log(log::Level::Error, format!("Script objet _on_game_launch : {e}")),
+                Err(e) => self.push_log(
+                    log::Level::Error,
+                    format!("Script objet _on_game_launch : {e}"),
+                ),
             }
         }
     }
 
     /// Met en pause.
-    pub fn pause(&mut self) { self.game_loop.pause(); }
+    pub fn pause(&mut self) {
+        self.game_loop.pause();
+    }
 
     /// Reprend depuis la pause.
-    pub fn resume(&mut self) { self.game_loop.resume(); }
+    pub fn resume(&mut self) {
+        self.game_loop.resume();
+    }
 
     /// Arrête la simulation et restaure la scène de l'éditeur.
     pub fn stop(&mut self) {
         // La barre d'outils peut avoir déjà basculé GameLoop en mode Editor
         // avant d'appeler cette méthode. L'instantané indique alors qu'une
         // session doit encore être nettoyée malgré l'absence de transition ici.
-        let has_active_session = self.game_loop.mode != EngineMode::Editor
-            || self.scene_snapshot.is_some();
+        let has_active_session =
+            self.game_loop.mode != EngineMode::Editor || self.scene_snapshot.is_some();
         self.game_loop.stop();
         self.area_overlaps.clear();
         self.scene_stack.clear();
+        self.hud_texts.clear();
         if !has_active_session {
             return;
         }
@@ -207,7 +257,10 @@ impl EditorState {
 
     /// Appelé chaque frame pendant Playing.
     pub fn update(&mut self, delta_time: f32) {
-        if !self.game_loop.is_simulating() { return; }
+        if !self.game_loop.is_simulating() {
+            return;
+        }
+        self.refresh_script_scenes();
         if self.script_runtime.has_legacy_update() {
             match self.script_runtime.call_update(delta_time) {
                 Ok(cmds) => self.apply_commands(cmds),
@@ -222,9 +275,17 @@ impl EditorState {
             // Object snapshots own all custom properties and textures. Avoid
             // cloning the scene every frame when no world/object update hook
             // needs one.
-            let mut objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
+            let mut objects = self
+                .active_scene()
+                .objects
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
             if has_world_update {
-                match self.script_runtime.call_world_update(delta_time, &self.input, &objects) {
+                match self
+                    .script_runtime
+                    .call_world_update(delta_time, &self.input, &objects)
+                {
                     Ok(cmds) => {
                         world_changed_scene = !cmds.is_empty();
                         self.apply_commands(cmds);
@@ -238,13 +299,39 @@ impl EditorState {
                 if world_changed_scene {
                     objects = self.active_scene().objects.values().cloned().collect();
                 }
-                match self.script_runtime.call_object_update(delta_time, &objects, &self.input) {
+                match self
+                    .script_runtime
+                    .call_object_update(delta_time, &objects, &self.input)
+                {
                     Ok(cmds) => self.apply_commands(cmds),
-                    Err(e) => self.push_log(log::Level::Error, format!("Script objet _on_update : {e}")),
+                    Err(e) => {
+                        self.push_log(log::Level::Error, format!("Script objet _on_update : {e}"))
+                    }
                 }
             }
         }
         self.update_area_triggers(delta_time);
+    }
+
+    /// Exécute le callback Python de l'objet cliqué pendant la lecture.
+    pub fn click_object(&mut self, object_id: ObjectId) {
+        if !self.game_loop.is_simulating() {
+            return;
+        }
+        self.refresh_script_scenes();
+        let objects = self
+            .active_scene()
+            .objects
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        match self
+            .script_runtime
+            .call_object_click(&object_id.to_string(), &objects, &self.input)
+        {
+            Ok(commands) => self.apply_commands(commands),
+            Err(error) => self.push_log(log::Level::Error, format!("_on_click : {error}")),
+        }
     }
 
     fn update_area_triggers(&mut self, delta_time: f32) {
@@ -252,34 +339,64 @@ impl EditorState {
             self.area_overlaps.clear();
             return;
         }
-        let has_active_areas = self.active_scene().objects.values()
-            .any(|object| self.script_runtime.object_has_area_hooks(&object.id.to_string()));
+        let has_active_areas = self.active_scene().objects.values().any(|object| {
+            self.script_runtime
+                .object_has_area_hooks(&object.id.to_string())
+        });
         if !has_active_areas {
             self.area_overlaps.clear();
             return;
         }
-        let objects = self.active_scene().objects.values().cloned().collect::<Vec<_>>();
-        let areas = objects.iter()
-            .filter(|object| self.script_runtime.object_has_area_hooks(&object.id.to_string()))
+        let objects = self
+            .active_scene()
+            .objects
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let areas = objects
+            .iter()
+            .filter(|object| {
+                self.script_runtime
+                    .object_has_area_hooks(&object.id.to_string())
+            })
             .collect::<Vec<_>>();
         let mut overlaps = HashSet::new();
         for area in &areas {
             for other in &objects {
-                if area.id == other.id || !object_footprints_overlap(area, other) { continue; }
+                if area.id == other.id || !object_footprints_overlap(area, other) {
+                    continue;
+                }
                 overlaps.insert((area.id, other.id));
             }
         }
 
         let mut events = Vec::new();
-        events.extend(overlaps.difference(&self.area_overlaps).map(|pair| ("_on_area_entered", *pair)));
-        events.extend(overlaps.intersection(&self.area_overlaps).map(|pair| ("_on_area_stayed", *pair)));
-        events.extend(self.area_overlaps.difference(&overlaps).map(|pair| ("_on_area_exited", *pair)));
+        events.extend(
+            overlaps
+                .difference(&self.area_overlaps)
+                .map(|pair| ("_on_area_entered", *pair)),
+        );
+        events.extend(
+            overlaps
+                .intersection(&self.area_overlaps)
+                .map(|pair| ("_on_area_stayed", *pair)),
+        );
+        events.extend(
+            self.area_overlaps
+                .difference(&overlaps)
+                .map(|pair| ("_on_area_exited", *pair)),
+        );
         events.sort_by_key(|(hook, (area, other))| (*hook, area.to_string(), other.to_string()));
         self.area_overlaps = overlaps;
 
         for (hook, (area_id, other_id)) in events {
             match self.script_runtime.call_object_area_event(
-                hook, &area_id.to_string(), &other_id.to_string(), delta_time, &objects, &self.input,
+                hook,
+                &area_id.to_string(),
+                &other_id.to_string(),
+                delta_time,
+                &objects,
+                &self.input,
             ) {
                 Ok(commands) => self.apply_commands(commands),
                 Err(error) => self.push_log(log::Level::Error, format!("{hook} : {error}")),
@@ -291,23 +408,56 @@ impl EditorState {
     fn apply_commands(&mut self, cmds: Vec<GameCommand>) {
         for cmd in cmds {
             match cmd {
-                GameCommand::Spawn { name, object_type, x, y } => {
+                GameCommand::SetHudText(text) => {
+                    self.hud_texts.insert(text.id.clone(), text);
+                }
+                GameCommand::UpdateHudText { id, text } => {
+                    if let Some(existing) = self.hud_texts.get_mut(&id) { existing.text = text; }
+                }
+                GameCommand::UpdateHudPosition { id, x, y } => {
+                    if let Some(existing) = self.hud_texts.get_mut(&id) { existing.x = x; existing.y = y; }
+                }
+                GameCommand::UpdateHudAnchor { id, anchor } => {
+                    if let Some(existing) = self.hud_texts.get_mut(&id) { existing.anchor = anchor; }
+                }
+                GameCommand::UpdateHudFontSize { id, font_size } => {
+                    if let Some(existing) = self.hud_texts.get_mut(&id) { existing.font_size = font_size; }
+                }
+                GameCommand::UpdateHudColor { id, color } => {
+                    if let Some(existing) = self.hud_texts.get_mut(&id) { existing.color = color; }
+                }
+                GameCommand::RemoveHudText { id } => {
+                    self.hud_texts.remove(&id);
+                }
+                GameCommand::Spawn {
+                    name,
+                    object_type,
+                    x,
+                    y,
+                } => {
                     let otype = match object_type.as_str() {
-                        "Building"   => ObjectType::Building,
-                        "Character"  => ObjectType::Character,
-                        "Item"       => ObjectType::Item,
+                        "Building" => ObjectType::Building,
+                        "Character" => ObjectType::Character,
+                        "Item" => ObjectType::Item,
                         "Decoration" => ObjectType::Decoration,
-                        other        => ObjectType::Custom(other.to_string()),
+                        other => ObjectType::Custom(other.to_string()),
                     };
-                    self.active_scene_mut().spawn(name, otype, TilePos::new(x, y));
+                    self.active_scene_mut()
+                        .spawn(name, otype, TilePos::new(x, y));
                 }
                 GameCommand::Destroy { object_id } => {
                     if let Ok(uuid) = uuid::Uuid::parse_str(&object_id) {
                         let id = world::object::ObjectId(uuid);
-                        let name = self.active_scene().get_object(id).map(|object| object.name.clone());
+                        let name = self
+                            .active_scene()
+                            .get_object(id)
+                            .map(|object| object.name.clone());
                         if self.active_scene_mut().remove_object(id).is_some() {
                             if let Some(name) = name {
-                                self.push_log(log::Level::Info, format!("Objet « {name} » supprimé."));
+                                self.push_log(
+                                    log::Level::Info,
+                                    format!("Objet « {name} » supprimé."),
+                                );
                             }
                         }
                     }
@@ -315,22 +465,33 @@ impl EditorState {
                 GameCommand::Move { object_id, x, y } => {
                     if let Ok(uuid) = uuid::Uuid::parse_str(&object_id) {
                         let id = world::object::ObjectId(uuid);
-                        let destination = self.active_scene().get_object(id)
+                        let destination = self
+                            .active_scene()
+                            .get_object(id)
                             .map(|object| TilePos::with_z(x, y, object.tile_pos.z));
                         if let Some(destination) = destination {
                             let result = move_object_with_collisions(
-                                self.project.world.active_scene_mut(), &self.project.tile_definitions, id, destination,
+                                self.project.world.active_scene_mut(),
+                                &self.project.tile_definitions,
+                                id,
+                                destination,
                             );
                             let _ = result;
                         }
                     }
                 }
-                GameCommand::SetProperty { object_id, key, value } => {
+                GameCommand::SetProperty {
+                    object_id,
+                    key,
+                    value,
+                } => {
                     if let Ok(uuid) = uuid::Uuid::parse_str(&object_id) {
                         let id = world::object::ObjectId(uuid);
                         let is_position = matches!(key.as_str(), "x" | "y" | "z");
                         let result = if is_position {
-                            let coordinate = value.as_i64().and_then(|v| i32::try_from(v).ok())
+                            let coordinate = value
+                                .as_i64()
+                                .and_then(|v| i32::try_from(v).ok())
                                 .ok_or_else(|| "attend un entier".to_owned());
                             match (self.active_scene().get_object(id), coordinate) {
                                 (Some(object), Ok(coordinate)) => {
@@ -341,8 +502,12 @@ impl EditorState {
                                         _ => destination.z = coordinate,
                                     }
                                     move_object_with_collisions(
-                                        self.project.world.active_scene_mut(), &self.project.tile_definitions, id, destination,
-                                    ).map(|_| ())
+                                        self.project.world.active_scene_mut(),
+                                        &self.project.tile_definitions,
+                                        id,
+                                        destination,
+                                    )
+                                    .map(|_| ())
                                 }
                                 (None, _) => Err(format!("Objet introuvable : {object_id}")),
                                 (_, Err(error)) => Err(error),
@@ -354,49 +519,57 @@ impl EditorState {
                             }
                         };
                         if let Err(error) = result {
-                            let level = if is_position { log::Level::Warn } else { log::Level::Error };
+                            let level = if is_position {
+                                log::Level::Warn
+                            } else {
+                                log::Level::Error
+                            };
                             self.store_log(level, format!("Propriété objet `{key}` : {error}"));
                         }
                     }
                 }
-                GameCommand::SetGlobal { key, value } => {
-                    self.push_log(
-                        log::Level::Debug,
-                        format!("SetGlobal: {} = {:?}", key, value),
-                    );
-                }
-                GameCommand::LoadScene { name } => {
-                    match self.load_scene_by_name(&name) {
-                        Ok(true) => self.push_log(log::Level::Info, format!("Scène « {name} » chargée.")),
-                        Ok(false) => {}
-                        Err(error) => self.push_log(log::Level::Error, error),
+                GameCommand::LoadScene { name } => match self.load_scene_by_name(&name) {
+                    Ok(true) => {
+                        self.push_log(log::Level::Info, format!("Scène « {name} » chargée."))
                     }
-                }
-                GameCommand::UnloadScene => {
-                    match self.unload_active_scene() {
-                        Ok(true) => {
-                            let name = self.active_scene().meta.name.clone();
-                            self.push_log(log::Level::Info, format!("Retour à la scène « {name} »."));
-                        }
-                        Ok(false) => {}
-                        Err(error) => self.push_log(log::Level::Warn, error),
+                    Ok(false) => {}
+                    Err(error) => self.push_log(log::Level::Error, error),
+                },
+                GameCommand::UnloadScene => match self.unload_active_scene() {
+                    Ok(true) => {
+                        let name = self.active_scene().meta.name.clone();
+                        self.push_log(log::Level::Info, format!("Retour à la scène « {name} »."));
                     }
-                }
-                GameCommand::TransferObject { object_id, scene_name, x, y } => {
-                    if let Err(error) = self.transfer_object_to_scene(&object_id, &scene_name, x, y) {
+                    Ok(false) => {}
+                    Err(error) => self.push_log(log::Level::Warn, error),
+                },
+                GameCommand::TransferObject {
+                    object_id,
+                    scene_name,
+                    x,
+                    y,
+                } => {
+                    if let Err(error) = self.transfer_object_to_scene(&object_id, &scene_name, x, y)
+                    {
                         self.push_log(log::Level::Warn, error);
                     }
                 }
-                GameCommand::Log { source, level, message } => {
+                GameCommand::Log {
+                    source,
+                    level,
+                    message,
+                } => {
                     let lvl = match level {
-                        scripting::command::LogLevel::Debug   => log::Level::Debug,
-                        scripting::command::LogLevel::Info    => log::Level::Info,
+                        scripting::command::LogLevel::Debug => log::Level::Debug,
+                        scripting::command::LogLevel::Info => log::Level::Info,
                         scripting::command::LogLevel::Warning => log::Level::Warn,
-                        scripting::command::LogLevel::Error   => log::Level::Error,
+                        scripting::command::LogLevel::Error => log::Level::Error,
                     };
                     self.push_script_log(lvl, &source, message);
                 }
-                GameCommand::Quit => { self.stop(); }
+                GameCommand::Quit => {
+                    self.stop();
+                }
             }
         }
     }
@@ -412,10 +585,15 @@ impl EditorState {
             .map_err(|_| format!("Identifiant d'objet invalide : {object_id}"))?;
         let id = world::object::ObjectId(uuid);
         let current_index = self.project.world.active_scene_index;
-        let target_index = self.project.world.scenes.iter()
+        let target_index = self
+            .project
+            .world
+            .scenes
+            .iter()
             .position(|scene| scene.meta.name == scene_name)
             .ok_or_else(|| format!("Aucune scène ne porte le nom « {scene_name} »."))?;
-        let mut destination = self.project.world.scenes[current_index].get_object(id)
+        let mut destination = self.project.world.scenes[current_index]
+            .get_object(id)
             .cloned()
             .ok_or_else(|| format!("Objet introuvable dans la scène actuelle : {object_id}"))?;
         destination.tile_pos.x = x;
@@ -431,13 +609,20 @@ impl EditorState {
                 destination.tile_pos,
             )?;
             if !moved {
-                return Err(format!("Transfert de « {object_name} » bloqué par une collision."));
+                return Err(format!(
+                    "Transfert de « {object_name} » bloqué par une collision."
+                ));
             }
             return Ok(());
         }
 
-        if self.project.world.scenes[target_index].get_object(id).is_some() {
-            return Err(format!("L'objet {object_id} existe déjà dans la scène « {scene_name} »."));
+        if self.project.world.scenes[target_index]
+            .get_object(id)
+            .is_some()
+        {
+            return Err(format!(
+                "L'objet {object_id} existe déjà dans la scène « {scene_name} »."
+            ));
         }
 
         self.project.world.scenes[target_index].add_object(destination);
@@ -455,7 +640,9 @@ impl EditorState {
         };
         if !moved {
             self.project.world.scenes[target_index].remove_object(id);
-            return Err(format!("Transfert de « {object_name} » vers « {scene_name} » bloqué par une collision."));
+            return Err(format!(
+                "Transfert de « {object_name} » vers « {scene_name} » bloqué par une collision."
+            ));
         }
 
         self.project.world.scenes[current_index].remove_object(id);
@@ -493,7 +680,12 @@ impl EditorState {
         }
         let id = self.next_log_id;
         self.next_log_id = self.next_log_id.wrapping_add(1).max(1);
-        self.log_messages.push_back(LogEntry { level, message: msg, repetitions: 1, id });
+        self.log_messages.push_back(LogEntry {
+            level,
+            message: msg,
+            repetitions: 1,
+            id,
+        });
     }
 
     fn record_undo(&mut self, snapshot: String) {
@@ -530,8 +722,13 @@ impl EditorState {
     }
 }
 
-fn object_footprints_overlap(a: &world::object::SceneObject, b: &world::object::SceneObject) -> bool {
-    if a.tile_pos.z != b.tile_pos.z { return false; }
+fn object_footprints_overlap(
+    a: &world::object::SceneObject,
+    b: &world::object::SceneObject,
+) -> bool {
+    if a.tile_pos.z != b.tile_pos.z {
+        return false;
+    }
     let (ax1, ay1) = (i64::from(a.tile_pos.x), i64::from(a.tile_pos.y));
     let (bx1, by1) = (i64::from(b.tile_pos.x), i64::from(b.tile_pos.y));
     let ax2 = ax1 + i64::from(a.footprint.width.max(1));
@@ -547,7 +744,8 @@ fn move_object_with_collisions(
     object_id: world::object::ObjectId,
     destination: TilePos,
 ) -> Result<bool, String> {
-    let object = scene.get_object(object_id)
+    let object = scene
+        .get_object(object_id)
         .ok_or_else(|| format!("Objet introuvable : {object_id}"))?
         .clone();
     if object.has_collisions {
@@ -560,14 +758,18 @@ fn move_object_with_collisions(
 
         for y in top..bottom {
             for x in left..right {
-                if x < i32::MIN as i64 || x > i32::MAX as i64
-                    || y < i32::MIN as i64 || y > i32::MAX as i64 {
+                if x < i32::MIN as i64
+                    || x > i32::MAX as i64
+                    || y < i32::MIN as i64
+                    || y > i32::MAX as i64
+                {
                     return Ok(false);
                 }
                 let tile = scene.get_tile(TilePos::new(x as i32, y as i32));
-                if tile_definitions.iter().any(|definition| {
-                    definition.id == tile.tile_type && definition.has_collisions
-                }) {
+                if tile_definitions
+                    .iter()
+                    .any(|definition| definition.id == tile.tile_type && definition.has_collisions)
+                {
                     return Ok(false);
                 }
             }
@@ -597,15 +799,20 @@ fn move_object_with_collisions(
 fn json_to_prop(v: serde_json::Value) -> world::object::PropValue {
     use world::object::PropValue;
     match v {
-        serde_json::Value::Null        => PropValue::Str(String::new()),
-        serde_json::Value::Bool(b)     => PropValue::Bool(b),
-        serde_json::Value::Number(n)   => {
-            if let Some(i) = n.as_i64() { PropValue::Int(i) }
-            else { PropValue::Float(n.as_f64().unwrap_or(0.0)) }
+        serde_json::Value::Null => PropValue::Str(String::new()),
+        serde_json::Value::Bool(b) => PropValue::Bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                PropValue::Int(i)
+            } else {
+                PropValue::Float(n.as_f64().unwrap_or(0.0))
+            }
         }
-        serde_json::Value::String(s)   => PropValue::Str(s),
-        serde_json::Value::Array(arr)  => PropValue::List(arr.into_iter().map(json_to_prop).collect()),
-        serde_json::Value::Object(_)   => PropValue::Str("[object]".to_string()),
+        serde_json::Value::String(s) => PropValue::Str(s),
+        serde_json::Value::Array(arr) => {
+            PropValue::List(arr.into_iter().map(json_to_prop).collect())
+        }
+        serde_json::Value::Object(_) => PropValue::Str("[object]".to_string()),
     }
 }
 
@@ -616,31 +823,52 @@ fn synchronize_custom_object_instances(
 ) {
     for scene in scenes {
         for object in scene.objects.values_mut() {
-            let Some(type_id) = object.custom_type_id else { continue };
-            let Some(definition) = definitions.iter().find(|definition| definition.id == type_id) else { continue };
+            let Some(type_id) = object.custom_type_id else {
+                continue;
+            };
+            let Some(definition) = definitions
+                .iter()
+                .find(|definition| definition.id == type_id)
+            else {
+                continue;
+            };
             object.object_type = ObjectType::Custom(definition.name.clone());
-            let valid_keys: HashSet<&str> = definition.properties.iter()
-                .map(|property| property.key.as_str()).collect();
-            object.properties.retain(|key, _| key == "texture" || valid_keys.contains(key.as_str()));
+            let valid_keys: HashSet<&str> = definition
+                .properties
+                .iter()
+                .map(|property| property.key.as_str())
+                .collect();
+            object
+                .properties
+                .retain(|key, _| key == "texture" || valid_keys.contains(key.as_str()));
 
             for property in &definition.properties {
                 let mut default = property.default_value.clone();
                 if property.kind == CustomPropertyKind::Scene {
                     if let PropValue::Str(value) = &default {
                         if !scene_names.iter().any(|name| name == value) {
-                            default = PropValue::Str(scene_names.first().cloned().unwrap_or_default());
+                            default =
+                                PropValue::Str(scene_names.first().cloned().unwrap_or_default());
                         }
                     }
                 }
-                let valid = object.properties.get(&property.key).is_some_and(|value| match property.kind {
-                    CustomPropertyKind::Text | CustomPropertyKind::Scene => matches!(value, PropValue::Str(_)),
-                    CustomPropertyKind::Integer => matches!(value, PropValue::Int(_)),
-                    CustomPropertyKind::Float => matches!(value, PropValue::Float(_)),
-                    CustomPropertyKind::Boolean => matches!(value, PropValue::Bool(_)),
-                });
+                let valid =
+                    object
+                        .properties
+                        .get(&property.key)
+                        .is_some_and(|value| match property.kind {
+                            CustomPropertyKind::Text | CustomPropertyKind::Scene => {
+                                matches!(value, PropValue::Str(_))
+                            }
+                            CustomPropertyKind::Integer => matches!(value, PropValue::Int(_)),
+                            CustomPropertyKind::Float => matches!(value, PropValue::Float(_)),
+                            CustomPropertyKind::Boolean => matches!(value, PropValue::Bool(_)),
+                        });
                 if !valid {
                     let value = match (property.kind, object.properties.get(&property.key)) {
-                        (CustomPropertyKind::Float, Some(PropValue::Int(value))) => PropValue::Float(*value as f64),
+                        (CustomPropertyKind::Float, Some(PropValue::Int(value))) => {
+                            PropValue::Float(*value as f64)
+                        }
                         _ => default,
                     };
                     object.properties.insert(property.key.clone(), value);
@@ -651,28 +879,47 @@ fn synchronize_custom_object_instances(
 }
 
 fn remap_custom_scene_properties(project: &mut Project, old_name: &str, new_name: Option<&str>) {
-    let fallback_scene = project.world.scenes.first().map(|scene| scene.meta.name.clone()).unwrap_or_default();
+    let fallback_scene = project
+        .world
+        .scenes
+        .first()
+        .map(|scene| scene.meta.name.clone())
+        .unwrap_or_default();
     let mut scene_keys = std::collections::HashMap::<uuid::Uuid, HashSet<String>>::new();
     for definition in &mut project.object_types {
-        let keys: HashSet<String> = definition.properties.iter()
+        let keys: HashSet<String> = definition
+            .properties
+            .iter()
             .filter(|property| property.kind == CustomPropertyKind::Scene)
-            .map(|property| property.key.clone()).collect();
-        if keys.is_empty() { continue; }
+            .map(|property| property.key.clone())
+            .collect();
+        if keys.is_empty() {
+            continue;
+        }
         for property in &mut definition.properties {
             if property.kind == CustomPropertyKind::Scene
-                && property.default_value.as_str() == Some(old_name) {
-                property.default_value = PropValue::Str(new_name.unwrap_or(&fallback_scene).to_owned());
+                && property.default_value.as_str() == Some(old_name)
+            {
+                property.default_value =
+                    PropValue::Str(new_name.unwrap_or(&fallback_scene).to_owned());
             }
         }
         scene_keys.insert(definition.id, keys);
     }
     for scene in &mut project.world.scenes {
         for object in scene.objects.values_mut() {
-            let Some(type_id) = object.custom_type_id else { continue };
-            let Some(keys) = scene_keys.get(&type_id) else { continue };
+            let Some(type_id) = object.custom_type_id else {
+                continue;
+            };
+            let Some(keys) = scene_keys.get(&type_id) else {
+                continue;
+            };
             for key in keys {
                 if object.properties.get(key).and_then(PropValue::as_str) == Some(old_name) {
-                    object.properties.insert(key.clone(), PropValue::Str(new_name.unwrap_or(&fallback_scene).to_owned()));
+                    object.properties.insert(
+                        key.clone(),
+                        PropValue::Str(new_name.unwrap_or(&fallback_scene).to_owned()),
+                    );
                 }
             }
         }
@@ -692,26 +939,36 @@ fn apply_script_object_property(
     key: &str,
     value: serde_json::Value,
 ) -> Result<(), String> {
-    use world::{layer::Layer, object::{PropValue, Rotation4}};
+    use world::{
+        layer::Layer,
+        object::{PropValue, Rotation4},
+    };
 
     match key {
-        "id" | "object_id" | "type" | "object_type" => {
-            Err(format!("`{key}` est en lecture seule"))
-        }
+        "id" | "object_id" | "type" | "object_type" => Err(format!("`{key}` est en lecture seule")),
         "name" => {
             object.name = value.as_str().ok_or("attend une chaîne")?.to_owned();
             Ok(())
         }
         "x" => {
-            object.tile_pos.x = value.as_i64().and_then(|v| i32::try_from(v).ok()).ok_or("attend un entier")?;
+            object.tile_pos.x = value
+                .as_i64()
+                .and_then(|v| i32::try_from(v).ok())
+                .ok_or("attend un entier")?;
             Ok(())
         }
         "y" => {
-            object.tile_pos.y = value.as_i64().and_then(|v| i32::try_from(v).ok()).ok_or("attend un entier")?;
+            object.tile_pos.y = value
+                .as_i64()
+                .and_then(|v| i32::try_from(v).ok())
+                .ok_or("attend un entier")?;
             Ok(())
         }
         "z" => {
-            object.tile_pos.z = value.as_i64().and_then(|v| i32::try_from(v).ok()).ok_or("attend un entier")?;
+            object.tile_pos.z = value
+                .as_i64()
+                .and_then(|v| i32::try_from(v).ok())
+                .ok_or("attend un entier")?;
             Ok(())
         }
         "camera_zoom" => {
@@ -729,7 +986,9 @@ fn apply_script_object_property(
         "camera_interpolation_speed" => {
             let speed = value.as_f64().ok_or("attend un nombre")? as f32;
             if !speed.is_finite() || !(0.1..=20.0).contains(&speed) {
-                return Err("camera_interpolation_speed doit être compris entre 0.1 et 20.0".to_owned());
+                return Err(
+                    "camera_interpolation_speed doit être compris entre 0.1 et 20.0".to_owned(),
+                );
             }
             object.camera_interpolation_speed = speed;
             Ok(())
@@ -790,9 +1049,15 @@ fn apply_script_object_property(
             Ok(())
         }
         "footprint_width" | "footprint_height" => {
-            let size = value.as_u64().and_then(|v| u32::try_from(v).ok()).ok_or("attend un entier positif")?;
-            if key == "footprint_width" { object.footprint.width = size; }
-            else { object.footprint.height = size; }
+            let size = value
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .ok_or("attend un entier positif")?;
+            if key == "footprint_width" {
+                object.footprint.width = size;
+            } else {
+                object.footprint.height = size;
+            }
             Ok(())
         }
         _ => {
@@ -811,6 +1076,8 @@ pub struct EditorApp {
     left_panel: LeftPanel,
     scene_view: SceneView,
     show_log: bool,
+    show_camera_selector: bool,
+    show_fps_overlay: bool,
     show_world_settings: bool,
     show_editor_settings: bool,
     editor_settings: EditorSettings,
@@ -846,6 +1113,10 @@ pub struct EditorApp {
 struct EditorSettings {
     hide_grid_during_play: bool,
     confirm_before_exit: bool,
+    show_fps_by_default: bool,
+    show_camera_selector_by_default: bool,
+    show_logs_by_default: bool,
+    default_project: Option<String>,
     recent_projects: Vec<String>,
     recent_textures: Vec<String>,
     recent_scripts: Vec<String>,
@@ -857,6 +1128,10 @@ impl Default for EditorSettings {
         Self {
             hide_grid_during_play: false,
             confirm_before_exit: true,
+            show_fps_by_default: true,
+            show_camera_selector_by_default: true,
+            show_logs_by_default: true,
+            default_project: None,
             recent_projects: Vec::new(),
             recent_textures: Vec::new(),
             recent_scripts: Vec::new(),
@@ -867,20 +1142,31 @@ impl Default for EditorSettings {
 
 impl EditorApp {
     pub fn new() -> Self {
+        Self::build(true)
+    }
+
+    fn build(load_default_project: bool) -> Self {
         let editor_settings = load_editor_settings();
+        let state = EditorState::new();
         let mut scene_view = SceneView::new();
+        scene_view.activate_scene_view(&state.active_scene().meta.name);
         scene_view.options.grid_color = egui::Color32::from_rgba_unmultiplied(
             editor_settings.grid_color[0],
             editor_settings.grid_color[1],
             editor_settings.grid_color[2],
             editor_settings.grid_color[3],
         );
-        Self {
-            state: EditorState::new(),
+        let default_project = load_default_project
+            .then(|| editor_settings.default_project.clone())
+            .flatten();
+        let mut app = Self {
+            state,
             toolbar: Toolbar::new(),
             left_panel: LeftPanel::new(),
             scene_view,
-            show_log: true,
+            show_log: editor_settings.show_logs_by_default,
+            show_camera_selector: editor_settings.show_camera_selector_by_default,
+            show_fps_overlay: editor_settings.show_fps_by_default,
             show_world_settings: false,
             show_editor_settings: false,
             editor_settings,
@@ -906,13 +1192,23 @@ impl EditorApp {
             player_mode: false,
             export_receiver: None,
             export_status: None,
+        };
+        if let Some(path) = default_project {
+            let path = std::path::PathBuf::from(path);
+            if let Err(error) = app.load_scene(&path) {
+                app.state.push_log(
+                    log::Level::Error,
+                    format!("Projet par défaut à l'ouverture : {error}"),
+                );
+            }
         }
+        app
     }
 
     /// Charge un projet et démarre directement sa simulation sans interface d'édition.
     pub fn new_player(path: &std::path::Path) -> anyhow::Result<Self> {
         let path = path.canonicalize()?;
-        let mut app = Self::new();
+        let mut app = Self::build(false);
         app.player_mode = true;
         app.show_log = false;
         app.load_scene(&path)?;
@@ -940,7 +1236,9 @@ impl EditorApp {
             return true;
         }
         let current_snapshot = canonical_project_snapshot(&self.state.project);
-        let is_dirty = self.saved_project_snapshot.as_ref()
+        let is_dirty = self
+            .saved_project_snapshot
+            .as_ref()
             .map_or(true, |saved| current_snapshot.as_ref() != Some(saved));
         if is_dirty {
             self.show_close_confirmation = true;
@@ -1002,7 +1300,9 @@ impl EditorApp {
     fn poll_export_job(&mut self) {
         let result = match self.export_receiver.as_ref().map(Receiver::try_recv) {
             Some(Ok(result)) => Some(result),
-            Some(Err(TryRecvError::Disconnected)) => Some(Err("Le processus d'export s'est interrompu.".into())),
+            Some(Err(TryRecvError::Disconnected)) => {
+                Some(Err("Le processus d'export s'est interrompu.".into()))
+            }
             Some(Err(TryRecvError::Empty)) | None => None,
         };
         let Some(result) = result else { return };
@@ -1010,8 +1310,13 @@ impl EditorApp {
         self.show_log = true;
         match result {
             Ok(path) => {
-                let size = std::fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
-                let message = format!("Export correctement terminé : {} ({size} octets)", path.display());
+                let size = std::fs::metadata(&path)
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0);
+                let message = format!(
+                    "Export correctement terminé : {} ({size} octets)",
+                    path.display()
+                );
                 self.export_status = Some(message.clone());
                 self.state.push_log(log::Level::Info, message);
             }
@@ -1028,17 +1333,25 @@ impl EditorApp {
             self.exit_requested = true;
         }
         let camera_pose = self.runtime_camera.and_then(|id| {
-            self.state.active_scene().get_object(id)
+            self.state
+                .active_scene()
+                .get_object(id)
                 .filter(|object| object.object_type == ObjectType::Camera)
-                .map(|object| (
-                    object.tile_pos,
-                    object.camera_zoom,
-                    object.camera_interpolation,
-                    object.camera_interpolation_speed,
-                ))
+                .map(|object| {
+                    (
+                        object.tile_pos,
+                        object.camera_zoom,
+                        object.camera_interpolation,
+                        object.camera_interpolation_speed,
+                    )
+                })
         });
         if let Some((tile_pos, zoom, interpolation, interpolation_speed)) = camera_pose {
-            let position = self.state.active_scene().projection().tile_to_screen(tile_pos);
+            let position = self
+                .state
+                .active_scene()
+                .projection()
+                .tile_to_screen(tile_pos);
             let target_position = egui::vec2(position.x, position.y);
             let target_zoom = zoom.clamp(0.1, 10.0);
             let blend = if interpolation {
@@ -1054,33 +1367,47 @@ impl EditorApp {
             self.scene_view.camera.zoom = *camera_zoom;
         }
 
-        let asset_root = self.project_path.as_ref()
+        let asset_root = self
+            .project_path
+            .as_ref()
             .and_then(|path| path.parent())
             .map(std::path::Path::to_path_buf)
             .unwrap_or_default();
-        egui::CentralPanel::default().frame(egui::Frame::default()).show(ctx, |ui| {
-            self.scene_view.show(
-                ui,
-                self.state.project.world.active_scene_mut(),
-                &self.state.project.tile_definitions,
-                crate::toolbar::EditorTool::Select,
-                &asset_root,
-                delta_time,
-                None,
-                false,
-                true,
-                false,
-                false,
-                &mut self.runtime_camera,
-            );
-        });
+        let hud_texts = self.state.hud_texts.values().cloned().collect::<Vec<_>>();
+        egui::CentralPanel::default()
+            .frame(egui::Frame::default())
+            .show(ctx, |ui| {
+                self.scene_view.show(
+                    ui,
+                    self.state.project.world.active_scene_mut(),
+                    &self.state.project.tile_definitions,
+                    crate::toolbar::EditorTool::Select,
+                    &asset_root,
+                    delta_time,
+                    None,
+                    false,
+                    true,
+                    false,
+                    false,
+                    &mut self.runtime_camera,
+                    &hud_texts,
+                );
+            });
+        if let Some(object_id) = self.scene_view.take_clicked_object() {
+            self.state.click_object(object_id);
+        }
     }
 
     /// Capture Ctrl+C/Ctrl+V avant qu'egui-winit les traite comme des raccourcis
     /// du presse-papiers texte.
     pub fn queue_clipboard_shortcut(&mut self, copy: bool) -> bool {
-        let has_selected_logs = self.show_log && self.log_selection_focused && self.state.log_messages.iter()
-            .any(|entry| self.selected_log_ids.contains(&entry.id));
+        let has_selected_logs = self.show_log
+            && self.log_selection_focused
+            && self
+                .state
+                .log_messages
+                .iter()
+                .any(|entry| self.selected_log_ids.contains(&entry.id));
         if copy && has_selected_logs {
             self.pending_log_copy = true;
             return true;
@@ -1095,7 +1422,9 @@ impl EditorApp {
     }
 
     fn selected_logs_as_text(&self) -> String {
-        self.state.log_messages.iter()
+        self.state
+            .log_messages
+            .iter()
             .filter(|entry| self.selected_log_ids.contains(&entry.id))
             .map(format_log_entry)
             .collect::<Vec<_>>()
@@ -1103,16 +1432,22 @@ impl EditorApp {
     }
 
     fn draw_ui(&mut self, ctx: &Context, delta_time: f32) {
-        self.selected_log_ids.retain(|id| self.state.log_messages.iter().any(|entry| entry.id == *id));
-        let pointer_click = ctx.input(|input| {
-            (input.pointer.any_click(), input.pointer.latest_pos())
-        });
+        self.selected_log_ids
+            .retain(|id| self.state.log_messages.iter().any(|entry| entry.id == *id));
+        let pointer_click =
+            ctx.input(|input| (input.pointer.any_click(), input.pointer.latest_pos()));
         if let (true, Some(position)) = pointer_click {
-            if !self.log_panel_rect.is_some_and(|rect| rect.contains(position)) {
+            if !self
+                .log_panel_rect
+                .is_some_and(|rect| rect.contains(position))
+            {
                 self.log_selection_focused = false;
             }
         }
-        let scene_before_ui = self.state.game_loop.is_editor()
+        let scene_before_ui = self
+            .state
+            .game_loop
+            .is_editor()
             .then(|| self.state.active_scene().to_json().ok())
             .flatten();
         let mut history_action = false;
@@ -1130,8 +1465,11 @@ impl EditorApp {
                 }
             });
             if let Some(redo) = history_shortcut {
-                if redo { self.state.redo(); }
-                else { self.state.undo(); }
+                if redo {
+                    self.state.redo();
+                } else {
+                    self.state.undo();
+                }
                 history_action = true;
             }
         }
@@ -1150,6 +1488,8 @@ impl EditorApp {
                     Some(crate::toolbar::EditorTool::TilePaint)
                 } else if input.key_pressed(egui::Key::G) {
                     Some(crate::toolbar::EditorTool::TileErase)
+                } else if input.key_pressed(egui::Key::A) {
+                    Some(crate::toolbar::EditorTool::TileFill)
                 } else {
                     None
                 }
@@ -1158,12 +1498,21 @@ impl EditorApp {
                 self.toolbar.active_tool = tool;
             }
         }
-        let save_shortcut = self.state.game_loop.is_editor() && !ctx.wants_keyboard_input()
+        let save_shortcut = self.state.game_loop.is_editor()
+            && !ctx.wants_keyboard_input()
             && ctx.input(|input| input.modifiers.ctrl && input.key_pressed(egui::Key::S));
-        let scene_names: Vec<String> = self.state.project.world.scenes.iter()
+        let scene_names: Vec<String> = self
+            .state
+            .project
+            .world
+            .scenes
+            .iter()
             .map(|scene| scene.meta.name.clone())
             .collect();
-        let recent_projects: Vec<std::path::PathBuf> = self.editor_settings.recent_projects.iter()
+        let recent_projects: Vec<std::path::PathBuf> = self
+            .editor_settings
+            .recent_projects
+            .iter()
             .map(std::path::PathBuf::from)
             .collect();
         let export_in_progress = self.export_receiver.is_some();
@@ -1183,13 +1532,16 @@ impl EditorApp {
             if self.toolbar.undo_requested && self.state.game_loop.mode == EngineMode::Editor {
                 self.state.undo();
                 history_action = true;
-            } else if self.toolbar.redo_requested && self.state.game_loop.mode == EngineMode::Editor {
+            } else if self.toolbar.redo_requested && self.state.game_loop.mode == EngineMode::Editor
+            {
                 self.state.redo();
                 history_action = true;
             }
             if self.state.game_loop.mode == EngineMode::Editor {
                 if self.toolbar.new_scene_requested {
-                    self.state.add_scene();
+                    let index = self.state.add_scene();
+                    let scene_name = self.state.project.world.scenes[index].meta.name.clone();
+                    self.scene_view.activate_scene_view(&scene_name);
                     self.scene_view.selected_object = None;
                     self.scene_view.selected_tiles.clear();
                     self.scene_view.selected_objects.clear();
@@ -1206,6 +1558,8 @@ impl EditorApp {
                     }
                 } else if let Some(index) = self.toolbar.scene_switch_requested {
                     if self.state.select_scene(index) {
+                        let scene_name = self.state.active_scene().meta.name.clone();
+                        self.scene_view.activate_scene_view(&scene_name);
                         self.scene_view.selected_object = None;
                         self.scene_view.selected_tiles.clear();
                         self.scene_view.selected_objects.clear();
@@ -1233,16 +1587,18 @@ impl EditorApp {
                                 Err(error) => {
                                     self.state.game_loop.stop();
                                     self.show_world_settings = true;
-                                    self.state.push_log(log::Level::Error,
-                                        format!("Lecture impossible : {error}"));
+                                    self.state.push_log(
+                                        log::Level::Error,
+                                        format!("Lecture impossible : {error}"),
+                                    );
                                 }
                             }
                         } else {
                             self.state.resume();
                         }
                     }
-                    EngineMode::Paused  => { /* déjà appliqué */ }
-                    EngineMode::Editor  => {
+                    EngineMode::Paused => { /* déjà appliqué */ }
+                    EngineMode::Editor => {
                         self.state.stop();
                         self.runtime_camera = None;
                         self.runtime_camera_position = None;
@@ -1269,6 +1625,7 @@ impl EditorApp {
         }
         if self.show_editor_settings {
             let mut settings_changed = false;
+            let mut choose_default_project = false;
             egui::Window::new("Paramètres de l'éditeur")
                 .open(&mut self.show_editor_settings)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -1295,19 +1652,88 @@ impl EditorApp {
                         &mut self.editor_settings.confirm_before_exit,
                         "Demander avant de quitter si le projet n'est pas enregistré",
                     ).changed();
+                    let response = ui.checkbox(
+                        &mut self.editor_settings.show_fps_by_default,
+                        "Afficher les FPS par défaut",
+                    );
+                    if response.changed() {
+                        self.show_fps_overlay = self.editor_settings.show_fps_by_default;
+                        settings_changed = true;
+                    }
+                    let response = ui.checkbox(
+                        &mut self.editor_settings.show_camera_selector_by_default,
+                        "Afficher le sélecteur de vue par défaut",
+                    );
+                    if response.changed() {
+                        self.show_camera_selector =
+                            self.editor_settings.show_camera_selector_by_default;
+                        settings_changed = true;
+                    }
+                    let response = ui.checkbox(
+                        &mut self.editor_settings.show_logs_by_default,
+                        "Afficher les logs par défaut",
+                    );
+                    if response.changed() {
+                        self.show_log = self.editor_settings.show_logs_by_default;
+                        settings_changed = true;
+                    }
+                    ui.separator();
+                    ui.label(egui::RichText::new("Démarrage").strong());
+                    ui.horizontal(|ui| {
+                        ui.label("Projet à ouvrir au lancement");
+                        if ui.button("...").clicked() {
+                            choose_default_project = true;
+                        }
+                        if self.editor_settings.default_project.is_some()
+                            && ui.button("Effacer").clicked()
+                        {
+                            self.editor_settings.default_project = None;
+                            settings_changed = true;
+                        }
+                    });
+                    if let Some(path) = &self.editor_settings.default_project {
+                        ui.label(egui::RichText::new(path).small());
+                    } else {
+                        ui.label(egui::RichText::new("Aucun projet défini").small());
+                    }
+                    ui.label(egui::RichText::new(
+                        "Ce projet sera ouvert au prochain démarrage de l'éditeur.",
+                    ).small().color(egui::Color32::GRAY));
                 });
+            if choose_default_project {
+                match choose_project_file(false) {
+                    Ok(Some(path)) => {
+                        self.editor_settings.default_project =
+                            Some(path.to_string_lossy().into_owned());
+                        settings_changed = true;
+                    }
+                    Ok(None) => {}
+                    Err(error) => self.state.push_log(
+                        log::Level::Error,
+                        format!("Sélection du projet par défaut : {error}"),
+                    ),
+                }
+            }
             if settings_changed {
                 if let Err(error) = self.save_editor_settings() {
-                    self.state.push_log(log::Level::Error,
-                        format!("Enregistrement des paramètres de l'éditeur : {error}"));
+                    self.state.push_log(
+                        log::Level::Error,
+                        format!("Enregistrement des paramètres de l'éditeur : {error}"),
+                    );
                 }
             }
         }
 
         if self.show_world_settings {
             let current_script = self.state.project.world.script.clone();
-            let main_scene_names = self.state.project.world.scenes.iter()
-                .map(|scene| scene.meta.name.clone()).collect::<Vec<_>>();
+            let main_scene_names = self
+                .state
+                .project
+                .world
+                .scenes
+                .iter()
+                .map(|scene| scene.meta.name.clone())
+                .collect::<Vec<_>>();
             let mut main_scene_index = self.state.project.world.main_scene_index;
             let mut main_scene_changed = false;
             let mut choose_script = false;
@@ -1320,13 +1746,18 @@ impl EditorApp {
                     ui.label(format!("Monde : {}", self.state.project.world.name));
                     ui.horizontal(|ui| {
                         ui.label("Scène principale (Main) :");
-                        let selected_name = main_scene_names.get(main_scene_index)
-                            .map(String::as_str).unwrap_or("Aucune");
+                        let selected_name = main_scene_names
+                            .get(main_scene_index)
+                            .map(String::as_str)
+                            .unwrap_or("Aucune");
                         egui::ComboBox::from_id_salt("world_main_scene")
                             .selected_text(selected_name)
                             .show_ui(ui, |ui| {
                                 for (index, name) in main_scene_names.iter().enumerate() {
-                                    if ui.selectable_value(&mut main_scene_index, index, name).changed() {
+                                    if ui
+                                        .selectable_value(&mut main_scene_index, index, name)
+                                        .changed()
+                                    {
                                         main_scene_changed = true;
                                     }
                                 }
@@ -1339,17 +1770,31 @@ impl EditorApp {
                         ui.label(current_script.as_deref().unwrap_or("Aucun"));
                     });
                     ui.horizontal(|ui| {
-                        if ui.button("Choisir un script…").clicked() { choose_script = true; }
-                        if ui.button("Créer un script…").clicked() { create_script = true; }
+                        if ui.button("Choisir un script…").clicked() {
+                            choose_script = true;
+                        }
+                        if ui.button("Créer un script…").clicked() {
+                            create_script = true;
+                        }
                     });
                     if let Some(path) = current_script.as_deref() {
-                        let root = self.project_path.as_ref().and_then(|p| p.parent())
+                        let root = self
+                            .project_path
+                            .as_ref()
+                            .and_then(|p| p.parent())
                             .map(std::path::Path::to_path_buf)
                             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
                         let path = std::path::Path::new(path);
-                        let resolved = if path.is_absolute() { path.to_owned() } else { root.join(path) };
+                        let resolved = if path.is_absolute() {
+                            path.to_owned()
+                        } else {
+                            root.join(path)
+                        };
                         if !resolved.is_file() {
-                            ui.colored_label(egui::Color32::YELLOW, "Fichier introuvable. Choisissez ou créez un script.");
+                            ui.colored_label(
+                                egui::Color32::YELLOW,
+                                "Fichier introuvable. Choisissez ou créez un script.",
+                            );
                         }
                     }
                 });
@@ -1361,26 +1806,41 @@ impl EditorApp {
             if choose_script {
                 match choose_script_file() {
                     Ok(Some(path)) => match self.assign_world_script(&path) {
-                        Ok(()) => self.state.push_log(log::Level::Info, "Script du monde configuré".into()),
-                        Err(error) => self.state.push_log(log::Level::Error, format!("Script du monde : {error}")),
+                        Ok(()) => self
+                            .state
+                            .push_log(log::Level::Info, "Script du monde configuré".into()),
+                        Err(error) => self
+                            .state
+                            .push_log(log::Level::Error, format!("Script du monde : {error}")),
                     },
-                    Ok(None) => {},
-                    Err(error) => self.state.push_log(log::Level::Error, format!("Sélecteur de script : {error}")),
+                    Ok(None) => {}
+                    Err(error) => self
+                        .state
+                        .push_log(log::Level::Error, format!("Sélecteur de script : {error}")),
                 }
             } else if create_script {
                 match choose_new_script_file("world.py") {
                     Ok(Some(path)) => match self.create_world_script(&path) {
-                        Ok(()) => self.state.push_log(log::Level::Info, "Script du monde créé".into()),
-                        Err(error) => self.state.push_log(log::Level::Error, format!("Création du script : {error}")),
+                        Ok(()) => self
+                            .state
+                            .push_log(log::Level::Info, "Script du monde créé".into()),
+                        Err(error) => self
+                            .state
+                            .push_log(log::Level::Error, format!("Création du script : {error}")),
                     },
-                    Ok(None) => {},
-                    Err(error) => self.state.push_log(log::Level::Error, format!("Création du script : {error}")),
+                    Ok(None) => {}
+                    Err(error) => self
+                        .state
+                        .push_log(log::Level::Error, format!("Création du script : {error}")),
                 }
             }
         }
 
         if self.toolbar.new_requested && self.state.game_loop.mode == EngineMode::Editor {
             self.state.project = Project::new("Nouveau projet");
+            self.scene_view.clear_scene_views();
+            let active_scene_name = self.state.active_scene().meta.name.clone();
+            self.scene_view.activate_scene_view(&active_scene_name);
             self.state.selected = None;
             self.state.scene_snapshot = None;
             self.state.undo_history.clear();
@@ -1396,18 +1856,24 @@ impl EditorApp {
             match choose_project_file(false) {
                 Ok(Some(path)) => match self.load_scene(&path) {
                     Ok(()) => history_action = true,
-                    Err(error) => self.state.push_log(log::Level::Error, format!("Ouverture : {error}")),
+                    Err(error) => self
+                        .state
+                        .push_log(log::Level::Error, format!("Ouverture : {error}")),
                 },
-                Ok(None) => {},
-                Err(error) => self.state.push_log(log::Level::Error, format!("Dialogue Ouvrir : {error}")),
+                Ok(None) => {}
+                Err(error) => self
+                    .state
+                    .push_log(log::Level::Error, format!("Dialogue Ouvrir : {error}")),
             }
         }
         if let Some(path) = self.toolbar.recent_project_requested.clone() {
             if self.state.game_loop.mode == EngineMode::Editor {
                 match self.load_scene(&path) {
                     Ok(()) => history_action = true,
-                    Err(error) => self.state.push_log(log::Level::Error,
-                        format!("Ouverture du projet récent : {error}")),
+                    Err(error) => self.state.push_log(
+                        log::Level::Error,
+                        format!("Ouverture du projet récent : {error}"),
+                    ),
                 }
             }
         }
@@ -1417,24 +1883,35 @@ impl EditorApp {
             if !self.toolbar.save_as_requested {
                 if let Some(path) = self.project_path.clone() {
                     if let Err(error) = self.save_scene(&path) {
-                        self.state.push_log(log::Level::Error, format!("Sauvegarde : {error}"));
+                        self.state
+                            .push_log(log::Level::Error, format!("Sauvegarde : {error}"));
                     }
                 } else {
                     match choose_project_file(true) {
-                        Ok(Some(path)) => if let Err(error) = self.save_scene(&path) {
-                            self.state.push_log(log::Level::Error, format!("Sauvegarde : {error}"));
-                        },
-                        Ok(None) => {},
-                        Err(error) => self.state.push_log(log::Level::Error, format!("Dialogue Enregistrer : {error}")),
+                        Ok(Some(path)) => {
+                            if let Err(error) = self.save_scene(&path) {
+                                self.state
+                                    .push_log(log::Level::Error, format!("Sauvegarde : {error}"));
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(error) => self
+                            .state
+                            .push_log(log::Level::Error, format!("Dialogue Enregistrer : {error}")),
                     }
                 }
             } else {
                 match choose_project_file(true) {
-                    Ok(Some(path)) => if let Err(error) = self.save_scene(&path) {
-                        self.state.push_log(log::Level::Error, format!("Sauvegarde : {error}"));
-                    },
-                    Ok(None) => {},
-                    Err(error) => self.state.push_log(log::Level::Error, format!("Dialogue Enregistrer : {error}")),
+                    Ok(Some(path)) => {
+                        if let Err(error) = self.save_scene(&path) {
+                            self.state
+                                .push_log(log::Level::Error, format!("Sauvegarde : {error}"));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => self
+                        .state
+                        .push_log(log::Level::Error, format!("Dialogue Enregistrer : {error}")),
                 }
             }
         }
@@ -1465,6 +1942,10 @@ impl EditorApp {
 
                 // Toggle log.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.toggle_value(&mut self.show_fps_overlay, "FPS")
+                        .on_hover_text("Afficher ou masquer le compteur FPS pendant la lecture");
+                    ui.toggle_value(&mut self.show_camera_selector, "Vue caméra")
+                        .on_hover_text("Afficher ou masquer le sélecteur caméra / vue libre en lecture");
                     ui.toggle_value(&mut self.show_log, "📋 Log");
                 });
             });
@@ -1547,28 +2028,52 @@ impl EditorApp {
         }
         if std::mem::take(&mut self.pending_log_copy) {
             let text = self.selected_logs_as_text();
-            if !text.is_empty() { ctx.copy_text(text); }
+            if !text.is_empty() {
+                ctx.copy_text(text);
+            }
         }
 
         // ── Panneau gauche ────────────────────────────────────────────────────
         let editing_enabled = self.state.game_loop.is_editor();
-        let project_root = self.project_path.as_deref()
+        let project_root = self
+            .project_path
+            .as_deref()
             .and_then(|path| project_browser_directory(path).ok())
             .and_then(|path| path.canonicalize().ok());
-        let active_project_file = self.project_path.as_deref()
+        let active_project_file = self
+            .project_path
+            .as_deref()
             .and_then(|path| path.canonicalize().ok());
-        let recent_asset_root = self.project_path.as_deref()
+        let recent_asset_root = self
+            .project_path
+            .as_deref()
             .and_then(|path| path.parent().map(std::path::Path::to_path_buf))
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
-        let recent_textures: Vec<String> = self.editor_settings.recent_textures.iter()
-            .filter(|path| recent_asset_exists(&recent_asset_root, path, &["png", "jpg", "jpeg", "gif"]))
-            .cloned().collect();
-        let recent_scripts: Vec<String> = self.editor_settings.recent_scripts.iter()
+        let recent_textures: Vec<String> = self
+            .editor_settings
+            .recent_textures
+            .iter()
+            .filter(|path| {
+                recent_asset_exists(&recent_asset_root, path, &["png", "jpg", "jpeg", "gif"])
+            })
+            .cloned()
+            .collect();
+        let recent_scripts: Vec<String> = self
+            .editor_settings
+            .recent_scripts
+            .iter()
             .filter(|path| recent_asset_exists(&recent_asset_root, path, &["py"]))
-            .cloned().collect();
-        let scene_names: Vec<String> = self.state.project.world.scenes.iter()
-            .map(|scene| scene.meta.name.clone()).collect();
+            .cloned()
+            .collect();
+        let scene_names: Vec<String> = self
+            .state
+            .project
+            .world
+            .scenes
+            .iter()
+            .map(|scene| scene.meta.name.clone())
+            .collect();
         let mut tile_texture_picker = None;
         let mut object_type_texture_picker = None;
         let mut object_type_script_picker = None;
@@ -1577,142 +2082,182 @@ impl EditorApp {
             .default_width(220.0)
             .show(ctx, |ui| {
                 ui.add_enabled_ui(editing_enabled, |ui| {
-                let selection_before_panel = self.state.selected;
-                let project = &mut self.state.project;
-                let action = self.left_panel.show(
-                    ui,
-                    project.world.active_scene_mut(),
-                    &mut self.state.selected,
-                    project_root.as_deref(),
-                    active_project_file.as_deref(),
-                    &mut project.tile_definitions,
-                    &mut project.object_types,
-                    &scene_names,
-                );
-                if self.state.selected != selection_before_panel {
-                    self.scene_view.selected_object = self.state.selected;
-                    self.scene_view.selected_objects.clear();
-                    self.scene_view.selected_tiles.clear();
-                }
-                match action {
-                    PanelAction::OpenFile(path) => {
-                        if let Err(error) = open_file_with_default_app(&path) {
-                            self.state.push_log(log::Level::Error, format!("Ouverture du fichier : {error}"));
+                    let selection_before_panel = self.state.selected;
+                    let project = &mut self.state.project;
+                    let action = self.left_panel.show(
+                        ui,
+                        project.world.active_scene_mut(),
+                        &mut self.state.selected,
+                        project_root.as_deref(),
+                        active_project_file.as_deref(),
+                        &mut project.tile_definitions,
+                        &mut project.object_types,
+                        &scene_names,
+                    );
+                    if self.state.selected != selection_before_panel {
+                        self.scene_view.selected_object = self.state.selected;
+                        self.scene_view.selected_objects.clear();
+                        self.scene_view.selected_tiles.clear();
+                    }
+                    match action {
+                        PanelAction::OpenFile(path) => {
+                            if let Err(error) = open_file_with_default_app(&path) {
+                                self.state.push_log(
+                                    log::Level::Error,
+                                    format!("Ouverture du fichier : {error}"),
+                                );
+                            }
                         }
-                    }
-                    PanelAction::CreateFile(path) => {
-                        if let Err(error) = self.create_project_file(&path) {
-                            self.state.push_log(log::Level::Error, format!("Création du fichier : {error}"));
+                        PanelAction::CreateFile(path) => {
+                            if let Err(error) = self.create_project_file(&path) {
+                                self.state.push_log(
+                                    log::Level::Error,
+                                    format!("Création du fichier : {error}"),
+                                );
+                            }
                         }
-                    }
-                    PanelAction::CreateDirectory(path) => {
-                        if let Err(error) = self.create_project_directory(&path) {
-                            self.state.push_log(log::Level::Error, format!("Création du dossier : {error}"));
+                        PanelAction::CreateDirectory(path) => {
+                            if let Err(error) = self.create_project_directory(&path) {
+                                self.state.push_log(
+                                    log::Level::Error,
+                                    format!("Création du dossier : {error}"),
+                                );
+                            }
                         }
-                    }
-                    PanelAction::RenamePath(old, new) => {
-                        if let Err(error) = self.rename_project_path(&old, &new) {
-                            self.state.push_log(log::Level::Error, format!("Renommage : {error}"));
+                        PanelAction::RenamePath(old, new) => {
+                            if let Err(error) = self.rename_project_path(&old, &new) {
+                                self.state
+                                    .push_log(log::Level::Error, format!("Renommage : {error}"));
+                            }
                         }
-                    }
-                    PanelAction::DeletePath(path) => {
-                        match self.delete_project_path(&path) {
-                            Ok(()) => self.state.push_log(log::Level::Info, format!("Fichier ou dossier supprimé : {}", path.display())),
-                            Err(error) => self.state.push_log(log::Level::Error, format!("Suppression : {error}")),
+                        PanelAction::DeletePath(path) => match self.delete_project_path(&path) {
+                            Ok(()) => self.state.push_log(
+                                log::Level::Info,
+                                format!("Fichier ou dossier supprimé : {}", path.display()),
+                            ),
+                            Err(error) => self
+                                .state
+                                .push_log(log::Level::Error, format!("Suppression : {error}")),
+                        },
+                        PanelAction::DeleteObject(id) => {
+                            self.pending_deletion = Some((vec![id], Vec::new()));
                         }
-                    }
-                    PanelAction::DeleteObject(id) => {
-                        self.pending_deletion = Some((vec![id], Vec::new()));
-                    }
-                    PanelAction::ChooseTileTexture(id) => tile_texture_picker = Some(id),
-                    PanelAction::DeleteTileDefinition(id) if id > 6 => {
-                        self.pending_tile_definition_deletion = Some(id);
-                    }
-                    PanelAction::AddObject => {
-                        let id = self.state.active_scene_mut().spawn(
-                            "Nouvel objet",
-                            world::object::ObjectType::Custom("custom".to_string()),
-                            TilePos::new(0, 0),
-                        );
-                        self.state.selected = Some(id);
-                    }
-                    PanelAction::ObjectTypesChanged => {
-                        synchronize_custom_object_instances(
-                            &mut self.state.project.world.scenes,
-                            &self.state.project.object_types,
-                            &scene_names,
-                        );
-                    }
-                    PanelAction::RenameCustomProperty(type_id, old_key, new_key) => {
-                        for scene in &mut self.state.project.world.scenes {
-                            for object in scene.objects.values_mut() {
-                                if object.custom_type_id == Some(type_id) {
-                                    if let Some(value) = object.properties.remove(&old_key) {
-                                        object.properties.insert(new_key.clone(), value);
+                        PanelAction::ChooseTileTexture(id) => tile_texture_picker = Some(id),
+                        PanelAction::DeleteTileDefinition(id) if id > 6 => {
+                            self.pending_tile_definition_deletion = Some(id);
+                        }
+                        PanelAction::AddObject => {
+                            let position = self
+                                .scene_view
+                                .object_placement_tile()
+                                .unwrap_or_else(|| TilePos::new(0, 0));
+                            let id = self.state.active_scene_mut().spawn(
+                                "Nouvel objet",
+                                world::object::ObjectType::Custom("custom".to_string()),
+                                position,
+                            );
+                            self.state.selected = Some(id);
+                        }
+                        PanelAction::ObjectTypesChanged => {
+                            synchronize_custom_object_instances(
+                                &mut self.state.project.world.scenes,
+                                &self.state.project.object_types,
+                                &scene_names,
+                            );
+                        }
+                        PanelAction::RenameCustomProperty(type_id, old_key, new_key) => {
+                            for scene in &mut self.state.project.world.scenes {
+                                for object in scene.objects.values_mut() {
+                                    if object.custom_type_id == Some(type_id) {
+                                        if let Some(value) = object.properties.remove(&old_key) {
+                                            object.properties.insert(new_key.clone(), value);
+                                        }
+                                    }
+                                }
+                            }
+                            synchronize_custom_object_instances(
+                                &mut self.state.project.world.scenes,
+                                &self.state.project.object_types,
+                                &scene_names,
+                            );
+                        }
+                        PanelAction::AddCustomObject(type_id) => {
+                            if let Some(definition) = self
+                                .state
+                                .project
+                                .object_types
+                                .iter()
+                                .find(|definition| definition.id == type_id)
+                                .cloned()
+                            {
+                                let position = self
+                                    .scene_view
+                                    .object_placement_tile()
+                                    .unwrap_or_else(|| TilePos::new(0, 0));
+                                let mut object = SceneObject::new(
+                                    definition.name.clone(),
+                                    ObjectType::Custom(definition.name.clone()),
+                                    position,
+                                );
+                                object.custom_type_id = Some(type_id);
+                                object.has_collisions = definition.defaults.has_collisions;
+                                object.hidden = definition.defaults.hidden;
+                                object.fit_texture_to_diamond =
+                                    definition.defaults.fit_texture_to_diamond;
+                                object.footprint = definition.defaults.footprint;
+                                object.rotation = definition.defaults.rotation;
+                                object.layer = definition.defaults.layer;
+                                object.script = definition.defaults.script.clone();
+                                object.asset_path = definition.defaults.texture.clone();
+                                if let Some(texture) = &definition.defaults.texture {
+                                    object.properties.insert(
+                                        "texture".to_owned(),
+                                        PropValue::Str(texture.clone()),
+                                    );
+                                }
+                                for property in definition.properties {
+                                    object
+                                        .properties
+                                        .insert(property.key, property.default_value);
+                                }
+                                let id = self.state.active_scene_mut().add_object(object);
+                                self.state.selected = Some(id);
+                                self.scene_view.selected_object = Some(id);
+                                self.scene_view.selected_objects.clear();
+                                self.scene_view.selected_objects.insert(id);
+                            }
+                        }
+                        PanelAction::DeleteCustomObjectType(type_id) => {
+                            self.state
+                                .project
+                                .object_types
+                                .retain(|definition| definition.id != type_id);
+                            for scene in &mut self.state.project.world.scenes {
+                                for object in scene.objects.values_mut() {
+                                    if object.custom_type_id == Some(type_id) {
+                                        object.custom_type_id = None;
+                                        object.object_type =
+                                            ObjectType::Custom("custom".to_owned());
                                     }
                                 }
                             }
                         }
-                        synchronize_custom_object_instances(
-                            &mut self.state.project.world.scenes,
-                            &self.state.project.object_types,
-                            &scene_names,
-                        );
-                    }
-                    PanelAction::AddCustomObject(type_id) => {
-                        if let Some(definition) = self.state.project.object_types.iter()
-                            .find(|definition| definition.id == type_id).cloned() {
-                            let position = self.scene_view.hovered_tile.unwrap_or_else(|| TilePos::new(0, 0));
-                            let mut object = SceneObject::new(
-                                definition.name.clone(),
-                                ObjectType::Custom(definition.name.clone()),
+                        PanelAction::AddCamera => {
+                            let position = self
+                                .scene_view
+                                .object_placement_tile()
+                                .unwrap_or_else(|| TilePos::new(0, 0));
+                            let camera = world::SceneObject::new(
+                                "Caméra",
+                                world::ObjectType::Camera,
                                 position,
                             );
-                            object.custom_type_id = Some(type_id);
-                            object.has_collisions = definition.defaults.has_collisions;
-                            object.hidden = definition.defaults.hidden;
-                            object.fit_texture_to_diamond = definition.defaults.fit_texture_to_diamond;
-                            object.footprint = definition.defaults.footprint;
-                            object.rotation = definition.defaults.rotation;
-                            object.layer = definition.defaults.layer;
-                            object.script = definition.defaults.script.clone();
-                            object.asset_path = definition.defaults.texture.clone();
-                            if let Some(texture) = &definition.defaults.texture {
-                                object.properties.insert("texture".to_owned(), PropValue::Str(texture.clone()));
-                            }
-                            for property in definition.properties {
-                                object.properties.insert(property.key, property.default_value);
-                            }
-                            let id = self.state.active_scene_mut().add_object(object);
+                            let id = self.state.active_scene_mut().add_object(camera);
                             self.state.selected = Some(id);
                             self.scene_view.selected_object = Some(id);
-                            self.scene_view.selected_objects.clear();
-                            self.scene_view.selected_objects.insert(id);
                         }
+                        _ => {}
                     }
-                    PanelAction::DeleteCustomObjectType(type_id) => {
-                        self.state.project.object_types.retain(|definition| definition.id != type_id);
-                        for scene in &mut self.state.project.world.scenes {
-                            for object in scene.objects.values_mut() {
-                                if object.custom_type_id == Some(type_id) {
-                                    object.custom_type_id = None;
-                                    object.object_type = ObjectType::Custom("custom".to_owned());
-                                }
-                            }
-                        }
-                    }
-                    PanelAction::AddCamera => {
-                        let camera = world::SceneObject::new(
-                            "Caméra",
-                            world::ObjectType::Camera,
-                            TilePos::new(0, 0),
-                        );
-                        let id = self.state.active_scene_mut().add_object(camera);
-                        self.state.selected = Some(id);
-                        self.scene_view.selected_object = Some(id);
-                    }
-                    _ => {}
-                }
                 });
             });
 
@@ -1720,17 +2265,25 @@ impl EditorApp {
             match choose_tile_texture_file() {
                 Ok(Some(path)) => match self.import_texture(&path) {
                     Ok(stored_path) => {
-                        if let Some(tile) = self.state.project.tile_definitions.iter_mut()
-                            .find(|tile| tile.id == tile_id) {
+                        if let Some(tile) = self
+                            .state
+                            .project
+                            .tile_definitions
+                            .iter_mut()
+                            .find(|tile| tile.id == tile_id)
+                        {
                             tile.texture = Some(stored_path);
                         }
                     }
-                    Err(error) => self.state.push_log(log::Level::Error,
-                        format!("Import de texture de tuile : {error}")),
+                    Err(error) => self.state.push_log(
+                        log::Level::Error,
+                        format!("Import de texture de tuile : {error}"),
+                    ),
                 },
                 Ok(None) => {}
-                Err(error) => self.state.push_log(log::Level::Error,
-                    format!("Sélecteur de texture : {error}")),
+                Err(error) => self
+                    .state
+                    .push_log(log::Level::Error, format!("Sélecteur de texture : {error}")),
             }
         }
 
@@ -1745,47 +2298,57 @@ impl EditorApp {
             .width_range(48.0..=f32::INFINITY)
             .show(ctx, |ui| {
                 ui.add_enabled_ui(editing_enabled, |ui| {
-                  ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                  egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                    let selected = self.state.selected;
-                    let mut request_texture_picker = false;
-                    let mut request_script_picker = false;
-                    let mut request_script_create = false;
-                    if let Some(type_id) = self.left_panel.selected_object_type_id() {
-                        let edit = Inspector::show_type_definition(
-                            ui,
-                            type_id,
-                            &mut self.state.project.object_types,
-                            &scene_names,
-                            &recent_textures,
-                            &recent_scripts,
-                            &mut request_texture_picker,
-                            &mut request_script_picker,
-                        );
-                        if request_texture_picker { object_type_texture_picker = Some(type_id); }
-                        if request_script_picker { object_type_script_picker = Some(type_id); }
-                        type_definition_edit = Some(edit);
-                    } else {
-                        Inspector::show(
-                            ui,
-                            self.state.project.world.active_scene_mut(),
-                            selected,
-                            self.scene_view.selected_objects.len(),
-                            &self.state.project.object_types,
-                            &scene_names,
-                            &recent_textures,
-                            &recent_scripts,
-                            &mut request_texture_picker,
-                            &mut request_script_picker,
-                            &mut request_script_create,
-                        );
-                        if request_texture_picker { texture_picker_object = selected; }
-                        if request_script_picker { script_picker_object = selected; }
-                        if request_script_create { script_create_object = selected; }
-                    }
-                  });
+                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let selected = self.state.selected;
+                            let mut request_texture_picker = false;
+                            let mut request_script_picker = false;
+                            let mut request_script_create = false;
+                            if let Some(type_id) = self.left_panel.selected_object_type_id() {
+                                let edit = Inspector::show_type_definition(
+                                    ui,
+                                    type_id,
+                                    &mut self.state.project.object_types,
+                                    &scene_names,
+                                    &recent_textures,
+                                    &recent_scripts,
+                                    &mut request_texture_picker,
+                                    &mut request_script_picker,
+                                );
+                                if request_texture_picker {
+                                    object_type_texture_picker = Some(type_id);
+                                }
+                                if request_script_picker {
+                                    object_type_script_picker = Some(type_id);
+                                }
+                                type_definition_edit = Some(edit);
+                            } else {
+                                Inspector::show(
+                                    ui,
+                                    self.state.project.world.active_scene_mut(),
+                                    selected,
+                                    self.scene_view.selected_objects.len(),
+                                    &self.state.project.object_types,
+                                    &scene_names,
+                                    &recent_textures,
+                                    &recent_scripts,
+                                    &mut request_texture_picker,
+                                    &mut request_script_picker,
+                                    &mut request_script_create,
+                                );
+                                if request_texture_picker {
+                                    texture_picker_object = selected;
+                                }
+                                if request_script_picker {
+                                    script_picker_object = selected;
+                                }
+                                if request_script_create {
+                                    script_create_object = selected;
+                                }
+                            }
+                        });
                 });
             });
 
@@ -1815,17 +2378,26 @@ impl EditorApp {
                 Ok(Some(path)) => match self.import_texture(&path) {
                     Ok(stored_path) => {
                         self.remember_recent_asset(&stored_path, true);
-                        if let Some(definition) = self.state.project.object_types.iter_mut()
-                            .find(|definition| definition.id == type_id) {
+                        if let Some(definition) = self
+                            .state
+                            .project
+                            .object_types
+                            .iter_mut()
+                            .find(|definition| definition.id == type_id)
+                        {
                             definition.defaults.texture = Some(stored_path);
                         }
                     }
-                    Err(error) => self.state.push_log(log::Level::Error,
-                        format!("Import de texture du type : {error}")),
+                    Err(error) => self.state.push_log(
+                        log::Level::Error,
+                        format!("Import de texture du type : {error}"),
+                    ),
                 },
                 Ok(None) => {}
-                Err(error) => self.state.push_log(log::Level::Error,
-                    format!("Sélecteur de texture du type : {error}")),
+                Err(error) => self.state.push_log(
+                    log::Level::Error,
+                    format!("Sélecteur de texture du type : {error}"),
+                ),
             }
         }
 
@@ -1834,17 +2406,26 @@ impl EditorApp {
                 Ok(Some(path)) => match self.import_object_script(&path) {
                     Ok(stored_path) => {
                         self.remember_recent_asset(&stored_path, false);
-                        if let Some(definition) = self.state.project.object_types.iter_mut()
-                            .find(|definition| definition.id == type_id) {
+                        if let Some(definition) = self
+                            .state
+                            .project
+                            .object_types
+                            .iter_mut()
+                            .find(|definition| definition.id == type_id)
+                        {
                             definition.defaults.script = Some(stored_path);
                         }
                     }
-                    Err(error) => self.state.push_log(log::Level::Error,
-                        format!("Import du script par défaut du type : {error}")),
+                    Err(error) => self.state.push_log(
+                        log::Level::Error,
+                        format!("Import du script par défaut du type : {error}"),
+                    ),
                 },
                 Ok(None) => {}
-                Err(error) => self.state.push_log(log::Level::Error,
-                    format!("Sélecteur de script du type : {error}")),
+                Err(error) => self.state.push_log(
+                    log::Level::Error,
+                    format!("Sélecteur de script du type : {error}"),
+                ),
             }
         }
 
@@ -1853,7 +2434,9 @@ impl EditorApp {
                 Ok(Some(path)) => match self.import_texture(&path) {
                     Ok(project_relative_path) => {
                         self.remember_recent_asset(&project_relative_path, true);
-                        if let Some(object) = self.state.active_scene_mut().get_object_mut(object_id) {
+                        if let Some(object) =
+                            self.state.active_scene_mut().get_object_mut(object_id)
+                        {
                             object.properties.insert(
                                 "texture".to_owned(),
                                 world::object::PropValue::Str(project_relative_path.clone()),
@@ -1861,16 +2444,14 @@ impl EditorApp {
                             object.asset_path = Some(project_relative_path);
                         }
                     }
-                    Err(error) => self.state.push_log(
-                        log::Level::Error,
-                        format!("Import de texture : {error}"),
-                    ),
+                    Err(error) => self
+                        .state
+                        .push_log(log::Level::Error, format!("Import de texture : {error}")),
                 },
                 Ok(None) => {}
-                Err(error) => self.state.push_log(
-                    log::Level::Error,
-                    format!("Sélecteur de texture : {error}"),
-                ),
+                Err(error) => self
+                    .state
+                    .push_log(log::Level::Error, format!("Sélecteur de texture : {error}")),
             }
         }
 
@@ -1879,16 +2460,20 @@ impl EditorApp {
                 Ok(Some(path)) => match self.import_object_script(&path) {
                     Ok(stored_path) => {
                         self.remember_recent_asset(&stored_path, false);
-                        if let Some(object) = self.state.active_scene_mut().get_object_mut(object_id) {
+                        if let Some(object) =
+                            self.state.active_scene_mut().get_object_mut(object_id)
+                        {
                             object.script = Some(stored_path);
                         }
                     }
-                    Err(error) => self.state.push_log(log::Level::Error,
-                        format!("Script de l'objet : {error}")),
+                    Err(error) => self
+                        .state
+                        .push_log(log::Level::Error, format!("Script de l'objet : {error}")),
                 },
-                Ok(None) => {},
-                Err(error) => self.state.push_log(log::Level::Error,
-                    format!("Sélecteur de script : {error}")),
+                Ok(None) => {}
+                Err(error) => self
+                    .state
+                    .push_log(log::Level::Error, format!("Sélecteur de script : {error}")),
             }
         }
         if let Some(object_id) = script_create_object {
@@ -1896,44 +2481,62 @@ impl EditorApp {
                 Ok(Some(path)) => match self.create_object_script(&path) {
                     Ok(stored_path) => {
                         self.remember_recent_asset(&stored_path, false);
-                        if let Some(object) = self.state.active_scene_mut().get_object_mut(object_id) {
+                        if let Some(object) =
+                            self.state.active_scene_mut().get_object_mut(object_id)
+                        {
                             object.script = Some(stored_path);
                         }
                     }
-                    Err(error) => self.state.push_log(log::Level::Error,
-                        format!("Création du script d'objet : {error}")),
+                    Err(error) => self.state.push_log(
+                        log::Level::Error,
+                        format!("Création du script d'objet : {error}"),
+                    ),
                 },
-                Ok(None) => {},
-                Err(error) => self.state.push_log(log::Level::Error,
-                    format!("Création du script d'objet : {error}")),
+                Ok(None) => {}
+                Err(error) => self.state.push_log(
+                    log::Level::Error,
+                    format!("Création du script d'objet : {error}"),
+                ),
             }
         }
 
         // ── Vue centrale (scène iso) ──────────────────────────────────────────
-        let asset_root = self.project_path.as_ref()
+        let asset_root = self
+            .project_path
+            .as_ref()
             .and_then(|path| path.parent())
             .map(std::path::Path::to_path_buf)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
-        let fps_overlay = (self.state.game_loop.mode == EngineMode::Playing)
+        let fps_overlay = (self.show_fps_overlay
+            && self.state.game_loop.mode == EngineMode::Playing)
             .then_some(self.fps_estimate);
+        let show_camera_selector = self.show_camera_selector;
         let grid_visible = self.scene_view.options.show_grid
             && (self.state.game_loop.mode == EngineMode::Editor
                 || !self.editor_settings.hide_grid_during_play);
         let editor_camera = self.scene_view.camera.clone();
         if !editing_enabled {
             let camera_pose = self.runtime_camera.and_then(|id| {
-                self.state.active_scene().get_object(id)
+                self.state
+                    .active_scene()
+                    .get_object(id)
                     .filter(|object| object.object_type == ObjectType::Camera)
-                    .map(|object| (
-                        object.tile_pos,
-                        object.camera_zoom,
-                        object.camera_interpolation,
-                        object.camera_interpolation_speed,
-                    ))
+                    .map(|object| {
+                        (
+                            object.tile_pos,
+                            object.camera_zoom,
+                            object.camera_interpolation,
+                            object.camera_interpolation_speed,
+                        )
+                    })
             });
             if let Some((tile_pos, zoom, interpolation, interpolation_speed)) = camera_pose {
-                let position = self.state.active_scene().projection().tile_to_screen(tile_pos);
+                let position = self
+                    .state
+                    .active_scene()
+                    .projection()
+                    .tile_to_screen(tile_pos);
                 let target_position = egui::vec2(position.x, position.y);
                 let target_zoom = zoom.clamp(0.1, 10.0);
                 let blend = if interpolation {
@@ -1953,6 +2556,7 @@ impl EditorApp {
                 self.runtime_camera_zoom = None;
             }
         }
+        let hud_texts = self.state.hud_texts.values().cloned().collect::<Vec<_>>();
         egui::CentralPanel::default().show(ctx, |ui| {
             self.scene_view.show(
                 ui,
@@ -1965,10 +2569,14 @@ impl EditorApp {
                 editing_enabled,
                 !editing_enabled,
                 grid_visible,
-                true,
+                show_camera_selector,
                 &mut self.runtime_camera,
+                &hud_texts,
             );
         });
+        if let Some(object_id) = self.scene_view.take_clicked_object() {
+            self.state.click_object(object_id);
+        }
         if self.pending_deletion.is_none() {
             if let Some(request) = self.scene_view.take_delete_request() {
                 self.pending_deletion = Some(request);
@@ -1991,18 +2599,32 @@ impl EditorApp {
                         confirm_deletion = true;
                     }
                     if object_ids.len() == 1 {
-                        let name = self.state.active_scene().get_object(object_ids[0])
-                            .map(|object| object.name.as_str()).unwrap_or("cet objet");
+                        let name = self
+                            .state
+                            .active_scene()
+                            .get_object(object_ids[0])
+                            .map(|object| object.name.as_str())
+                            .unwrap_or("cet objet");
                         ui.label(format!("Supprimer l'objet « {name} » de la scène ?"));
                     } else {
-                        ui.label(format!("Supprimer ces {} objets de la scène ?", object_ids.len()));
+                        ui.label(format!(
+                            "Supprimer ces {} objets de la scène ?",
+                            object_ids.len()
+                        ));
                     }
                     if !tiles.is_empty() {
-                        ui.label(format!("{} tuiles sélectionnées seront également supprimées.", tiles.len()));
+                        ui.label(format!(
+                            "{} tuiles sélectionnées seront également supprimées.",
+                            tiles.len()
+                        ));
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Annuler").clicked() { cancel_deletion = true; }
-                        if ui.button("Supprimer").clicked() { confirm_deletion = true; }
+                        if ui.button("Annuler").clicked() {
+                            cancel_deletion = true;
+                        }
+                        if ui.button("Supprimer").clicked() {
+                            confirm_deletion = true;
+                        }
                     });
                 });
         }
@@ -2011,14 +2633,23 @@ impl EditorApp {
         } else if confirm_deletion {
             if let Some((object_ids, tiles)) = self.pending_deletion.take() {
                 for id in object_ids {
-                    let name = self.state.active_scene().get_object(id).map(|object| object.name.clone());
+                    let name = self
+                        .state
+                        .active_scene()
+                        .get_object(id)
+                        .map(|object| object.name.clone());
                     let removed = self.state.active_scene_mut().remove_object(id).is_some();
                     self.scene_view.selected_objects.remove(&id);
-                    if self.state.selected == Some(id) { self.state.selected = None; }
-                    if self.scene_view.selected_object == Some(id) { self.scene_view.selected_object = None; }
+                    if self.state.selected == Some(id) {
+                        self.state.selected = None;
+                    }
+                    if self.scene_view.selected_object == Some(id) {
+                        self.scene_view.selected_object = None;
+                    }
                     if removed {
                         if let Some(name) = name {
-                            self.state.push_log(log::Level::Info, format!("Objet « {name} » supprimé."));
+                            self.state
+                                .push_log(log::Level::Info, format!("Objet « {name} » supprimé."));
                         }
                     }
                 }
@@ -2047,8 +2678,12 @@ impl EditorApp {
                         ui.colored_label(egui::Color32::RED, error);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Annuler").clicked() { cancel_scene_rename = true; }
-                        if ui.button("Renommer").clicked() { confirm_scene_rename = true; }
+                        if ui.button("Annuler").clicked() {
+                            cancel_scene_rename = true;
+                        }
+                        if ui.button("Renommer").clicked() {
+                            confirm_scene_rename = true;
+                        }
                     });
                 });
         }
@@ -2058,8 +2693,11 @@ impl EditorApp {
         } else if confirm_scene_rename {
             if let Some(index) = self.pending_scene_rename {
                 let name = self.scene_rename_buffer.trim().to_owned();
-                let duplicate = self.state.project.world.scenes.iter().enumerate()
-                    .any(|(other_index, scene)| other_index != index && scene.meta.name.eq_ignore_ascii_case(&name));
+                let duplicate = self.state.project.world.scenes.iter().enumerate().any(
+                    |(other_index, scene)| {
+                        other_index != index && scene.meta.name.eq_ignore_ascii_case(&name)
+                    },
+                );
                 if name.is_empty() {
                     self.scene_rename_error = Some("Le nom ne peut pas être vide.".to_owned());
                 } else if duplicate {
@@ -2067,6 +2705,7 @@ impl EditorApp {
                 } else if let Some(scene) = self.state.project.world.scenes.get_mut(index) {
                     let old_name = scene.meta.name.clone();
                     scene.meta.name = name.clone();
+                    self.scene_view.rename_scene_view(&old_name, &name);
                     remap_custom_scene_properties(&mut self.state.project, &old_name, Some(&name));
                     self.pending_scene_rename = None;
                     self.scene_rename_error = None;
@@ -2080,8 +2719,14 @@ impl EditorApp {
         let mut confirm_scene_deletion = false;
         let mut cancel_scene_deletion = false;
         if let Some(index) = self.pending_scene_deletion {
-            let name = self.state.project.world.scenes.get(index)
-                .map(|scene| scene.meta.name.clone()).unwrap_or_default();
+            let name = self
+                .state
+                .project
+                .world
+                .scenes
+                .get(index)
+                .map(|scene| scene.meta.name.clone())
+                .unwrap_or_default();
             egui::Window::new("Supprimer la scène ?")
                 .collapsible(false)
                 .resizable(false)
@@ -2095,8 +2740,12 @@ impl EditorApp {
                     }
                     ui.label(format!("Supprimer la scène « {name} » ?"));
                     ui.horizontal(|ui| {
-                        if ui.button("Annuler").clicked() { cancel_scene_deletion = true; }
-                        if ui.button("Supprimer").clicked() { confirm_scene_deletion = true; }
+                        if ui.button("Annuler").clicked() {
+                            cancel_scene_deletion = true;
+                        }
+                        if ui.button("Supprimer").clicked() {
+                            confirm_scene_deletion = true;
+                        }
                     });
                 });
         }
@@ -2107,9 +2756,24 @@ impl EditorApp {
                 if self.state.project.world.scenes.len() > 1 {
                     let was_active = self.state.project.world.active_scene_index == index;
                     if let Some(removed) = self.state.project.world.remove_scene(index) {
-                        remap_custom_scene_properties(&mut self.state.project, &removed.meta.name, None);
-                        let names: Vec<String> = self.state.project.world.scenes.iter()
-                            .map(|scene| scene.meta.name.clone()).collect();
+                        if was_active {
+                            let active_scene_name = self.state.active_scene().meta.name.clone();
+                            self.scene_view.activate_scene_view(&active_scene_name);
+                        }
+                        self.scene_view.remove_scene_view(&removed.meta.name);
+                        remap_custom_scene_properties(
+                            &mut self.state.project,
+                            &removed.meta.name,
+                            None,
+                        );
+                        let names: Vec<String> = self
+                            .state
+                            .project
+                            .world
+                            .scenes
+                            .iter()
+                            .map(|scene| scene.meta.name.clone())
+                            .collect();
                         synchronize_custom_object_instances(
                             &mut self.state.project.world.scenes,
                             &self.state.project.object_types,
@@ -2122,8 +2786,10 @@ impl EditorApp {
                             self.scene_view.selected_objects.clear();
                             self.scene_view.selected_tiles.clear();
                         }
-                        self.state.push_log(log::Level::Info,
-                            format!("Scène « {} » supprimée.", removed.meta.name));
+                        self.state.push_log(
+                            log::Level::Info,
+                            format!("Scène « {} » supprimée.", removed.meta.name),
+                        );
                         history_action = true;
                     }
                 }
@@ -2133,7 +2799,11 @@ impl EditorApp {
         let mut confirm_tile_definition_deletion = false;
         let mut cancel_tile_definition_deletion = false;
         if let Some(tile_id) = self.pending_tile_definition_deletion {
-            let tile_name = self.state.project.tile_definitions.iter()
+            let tile_name = self
+                .state
+                .project
+                .tile_definitions
+                .iter()
                 .find(|tile| tile.id == tile_id)
                 .map(|tile| tile.name.clone())
                 .unwrap_or_else(|| format!("tuile {tile_id}"));
@@ -2160,24 +2830,41 @@ impl EditorApp {
         } else if confirm_tile_definition_deletion {
             if let Some(tile_id) = self.pending_tile_definition_deletion.take() {
                 if tile_id > 6 {
-                    let tile_name = self.state.project.tile_definitions.iter()
+                    let tile_name = self
+                        .state
+                        .project
+                        .tile_definitions
+                        .iter()
                         .find(|tile| tile.id == tile_id)
                         .map(|tile| tile.name.clone())
                         .unwrap_or_else(|| format!("tuile {tile_id}"));
-                    self.state.project.tile_definitions.retain(|tile| tile.id != tile_id);
+                    self.state
+                        .project
+                        .tile_definitions
+                        .retain(|tile| tile.id != tile_id);
                     let active_scene = self.state.project.world.active_scene_index;
                     let mut removed_active_tiles = Vec::new();
                     for (index, scene) in self.state.project.world.scenes.iter_mut().enumerate() {
                         let removed = remove_tile_definition_from_scene(scene, tile_id);
-                        if index == active_scene { removed_active_tiles = removed; }
+                        if index == active_scene {
+                            removed_active_tiles = removed;
+                        }
                     }
                     for tile in removed_active_tiles {
                         self.scene_view.selected_tiles.remove(&tile);
                     }
-                    self.left_panel.selected_tile_type = self.state.project.tile_definitions
-                        .iter().map(|tile| tile.id).min().unwrap_or(1);
-                    self.state.push_log(log::Level::Info,
-                        format!("Tuile personnalisée « {tile_name} » supprimée du projet."));
+                    self.left_panel.selected_tile_type = self
+                        .state
+                        .project
+                        .tile_definitions
+                        .iter()
+                        .map(|tile| tile.id)
+                        .min()
+                        .unwrap_or(1);
+                    self.state.push_log(
+                        log::Level::Info,
+                        format!("Tuile personnalisée « {tile_name} » supprimée du projet."),
+                    );
                 }
             }
         }
@@ -2196,9 +2883,15 @@ impl EditorApp {
                     }
                     ui.label("Le projet a été modifié depuis sa dernière sauvegarde.");
                     ui.horizontal(|ui| {
-                        if ui.button("Sauvegarder et quitter").clicked() { save_and_close = true; }
-                        if ui.button("Quitter sans sauvegarder").clicked() { close_without_saving = true; }
-                        if ui.button("Annuler").clicked() { cancel_close = true; }
+                        if ui.button("Sauvegarder et quitter").clicked() {
+                            save_and_close = true;
+                        }
+                        if ui.button("Quitter sans sauvegarder").clicked() {
+                            close_without_saving = true;
+                        }
+                        if ui.button("Annuler").clicked() {
+                            cancel_close = true;
+                        }
                     });
                 });
         }
@@ -2209,10 +2902,15 @@ impl EditorApp {
             self.exit_requested = true;
         } else if save_and_close {
             let save_result = if let Some(path) = self.project_path.clone() {
-                self.save_scene(&path).map(Some).map_err(|error| error.to_string())
+                self.save_scene(&path)
+                    .map(Some)
+                    .map_err(|error| error.to_string())
             } else {
                 match choose_project_file(true) {
-                    Ok(Some(path)) => self.save_scene(&path).map(Some).map_err(|error| error.to_string()),
+                    Ok(Some(path)) => self
+                        .save_scene(&path)
+                        .map(Some)
+                        .map_err(|error| error.to_string()),
                     Ok(None) => Ok(None),
                     Err(error) => Err(error.to_string()),
                 }
@@ -2223,8 +2921,10 @@ impl EditorApp {
                     self.exit_requested = true;
                 }
                 Ok(None) => {}
-                Err(error) => self.state.push_log(log::Level::Error,
-                    format!("Sauvegarde avant fermeture : {error}")),
+                Err(error) => self.state.push_log(
+                    log::Level::Error,
+                    format!("Sauvegarde avant fermeture : {error}"),
+                ),
             }
         }
         if !editing_enabled {
@@ -2232,7 +2932,9 @@ impl EditorApp {
         }
 
         if !history_action && self.state.game_loop.mode == EngineMode::Editor {
-            if let (Some(before), Ok(after)) = (scene_before_ui, self.state.active_scene().to_json()) {
+            if let (Some(before), Ok(after)) =
+                (scene_before_ui, self.state.active_scene().to_json())
+            {
                 if before != after {
                     self.state.record_undo(before);
                 }
@@ -2243,11 +2945,19 @@ impl EditorApp {
     /// Sauvegarde le projet complet (métadonnées, monde et toutes ses scènes).
     pub fn save_scene(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         let path = with_project_extension(path);
-        let path = if path.is_absolute() { path } else { std::env::current_dir()?.join(path) };
-        let project_root = path.parent().ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?;
+        let path = if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let project_root = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?;
         std::fs::create_dir_all(project_root)?;
 
-        let source_root = self.project_path.as_ref()
+        let source_root = self
+            .project_path
+            .as_ref()
             .and_then(|path| path.parent())
             .map(std::path::Path::to_path_buf)
             .unwrap_or(std::env::current_dir()?);
@@ -2257,15 +2967,29 @@ impl EditorApp {
         let target_asset_dir = target_asset_dir.canonicalize()?;
         let target_root = project_root.canonicalize()?;
 
-        let texture_references: Vec<(usize, ObjectId, String)> = self.state.project.world.scenes
+        let texture_references: Vec<(usize, ObjectId, String)> = self
+            .state
+            .project
+            .world
+            .scenes
             .iter()
             .enumerate()
-            .flat_map(|(scene_index, scene)| scene.objects.values().filter_map(move |object| {
-                let path = object.asset_path.as_deref().filter(|path| !path.is_empty())
-                    .or_else(|| object.properties.get("texture")
-                        .and_then(|value| value.as_str()).filter(|path| !path.is_empty()))?;
-                Some((scene_index, object.id, path.to_owned()))
-            }))
+            .flat_map(|(scene_index, scene)| {
+                scene.objects.values().filter_map(move |object| {
+                    let path = object
+                        .asset_path
+                        .as_deref()
+                        .filter(|path| !path.is_empty())
+                        .or_else(|| {
+                            object
+                                .properties
+                                .get("texture")
+                                .and_then(|value| value.as_str())
+                                .filter(|path| !path.is_empty())
+                        })?;
+                    Some((scene_index, object.id, path.to_owned()))
+                })
+            })
             .collect();
 
         let asset_prefix = target_asset_dir.strip_prefix(&target_root)?;
@@ -2273,7 +2997,11 @@ impl EditorApp {
         let mut texture_updates = Vec::new();
         for (scene_index, object_id, stored_path) in texture_references {
             let stored = std::path::Path::new(&stored_path);
-            let source_path = if stored.is_absolute() { stored.to_owned() } else { source_root.join(stored) };
+            let source_path = if stored.is_absolute() {
+                stored.to_owned()
+            } else {
+                source_root.join(stored)
+            };
             let source = match source_path.canonicalize() {
                 Ok(source) => source,
                 Err(error) => {
@@ -2303,7 +3031,9 @@ impl EditorApp {
         }
 
         for (scene_index, object_id, relative) in texture_updates {
-            if let Some(object) = self.state.project.world.scenes[scene_index].get_object_mut(object_id) {
+            if let Some(object) =
+                self.state.project.world.scenes[scene_index].get_object_mut(object_id)
+            {
                 object.asset_path = Some(relative.clone());
                 object.properties.insert(
                     "texture".to_owned(),
@@ -2312,79 +3042,137 @@ impl EditorApp {
             }
         }
 
-        let tile_texture_references: Vec<(u16, String)> = self.state.project.tile_definitions.iter()
-            .filter_map(|tile| tile.texture.as_ref().filter(|path| !path.trim().is_empty())
-                .map(|path| (tile.id, path.clone())))
+        let tile_texture_references: Vec<(u16, String)> = self
+            .state
+            .project
+            .tile_definitions
+            .iter()
+            .filter_map(|tile| {
+                tile.texture
+                    .as_ref()
+                    .filter(|path| !path.trim().is_empty())
+                    .map(|path| (tile.id, path.clone()))
+            })
             .collect();
         let mut tile_texture_updates = Vec::new();
         for (tile_id, stored_path) in tile_texture_references {
             let stored = std::path::Path::new(&stored_path);
-            let source_path = if stored.is_absolute() { stored.to_owned() } else { source_root.join(stored) };
+            let source_path = if stored.is_absolute() {
+                stored.to_owned()
+            } else {
+                source_root.join(stored)
+            };
             let source = match source_path.canonicalize() {
                 Ok(source) => source,
                 Err(error) => {
-                    self.state.push_log(log::Level::Warn,
-                        format!("Texture de tuile manquante `{stored_path}` : {error}"));
+                    self.state.push_log(
+                        log::Level::Warn,
+                        format!("Texture de tuile manquante `{stored_path}` : {error}"),
+                    );
                     continue;
                 }
             };
             let relative = if let Some(relative) = copied_sources.get(&source) {
                 relative.clone()
             } else if let Ok(within_assets) = source.strip_prefix(&target_asset_dir) {
-                let relative = asset_prefix.join(within_assets).to_string_lossy().replace('\\', "/");
+                let relative = asset_prefix
+                    .join(within_assets)
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 copied_sources.insert(source, relative.clone());
                 relative
             } else {
                 let destination = copy_asset_to_directory(&source, &target_asset_dir)?;
-                let relative = asset_prefix.join(destination.file_name().unwrap_or_default())
-                    .to_string_lossy().replace('\\', "/");
+                let relative = asset_prefix
+                    .join(destination.file_name().unwrap_or_default())
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 copied_sources.insert(source, relative.clone());
                 relative
             };
             tile_texture_updates.push((tile_id, relative));
         }
         for (tile_id, relative) in tile_texture_updates {
-            if let Some(tile) = self.state.project.tile_definitions.iter_mut().find(|tile| tile.id == tile_id) {
+            if let Some(tile) = self
+                .state
+                .project
+                .tile_definitions
+                .iter_mut()
+                .find(|tile| tile.id == tile_id)
+            {
                 tile.texture = Some(relative);
             }
         }
 
-        let script_references: Vec<(usize, ObjectId, String)> = self.state.project.world.scenes
-            .iter().enumerate().flat_map(|(scene_index, scene)| scene.objects.values()
-                .filter_map(move |object| object.script.as_ref().filter(|value| !value.trim().is_empty())
-                    .map(|value| (scene_index, object.id, value.clone()))))
+        let script_references: Vec<(usize, ObjectId, String)> = self
+            .state
+            .project
+            .world
+            .scenes
+            .iter()
+            .enumerate()
+            .flat_map(|(scene_index, scene)| {
+                scene.objects.values().filter_map(move |object| {
+                    object
+                        .script
+                        .as_ref()
+                        .filter(|value| !value.trim().is_empty())
+                        .map(|value| (scene_index, object.id, value.clone()))
+                })
+            })
             .collect();
         let target_scripts_dir = project_script_directory(&path)?;
         std::fs::create_dir_all(&target_scripts_dir)?;
         let target_scripts_dir = target_scripts_dir.canonicalize()?;
         let scripts_prefix = project_script_prefix(&path)?;
-        if let Some(stored_path) = self.state.project.world.script.clone()
-            .filter(|value| !value.trim().is_empty()) {
+        if let Some(stored_path) = self
+            .state
+            .project
+            .world
+            .script
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+        {
             let stored = std::path::Path::new(&stored_path);
-            let source_path = if stored.is_absolute() { stored.to_owned() } else { source_root.join(stored) };
+            let source_path = if stored.is_absolute() {
+                stored.to_owned()
+            } else {
+                source_root.join(stored)
+            };
             match source_path.canonicalize() {
                 Ok(source) => {
-                    let relative = if let Ok(within_scripts) = source.strip_prefix(&target_scripts_dir) {
+                    let relative = if let Ok(within_scripts) =
+                        source.strip_prefix(&target_scripts_dir)
+                    {
                         scripts_prefix.join(within_scripts)
                     } else {
                         let destination = copy_asset_to_directory(&source, &target_scripts_dir)?;
                         scripts_prefix.join(destination.file_name().unwrap_or_default())
                     };
-                    self.state.project.world.script = Some(relative.to_string_lossy().replace('\\', "/"));
+                    self.state.project.world.script =
+                        Some(relative.to_string_lossy().replace('\\', "/"));
                 }
-                Err(error) => self.state.push_log(log::Level::Warn,
-                    format!("Script du monde manquant `{stored_path}` : {error}")),
+                Err(error) => self.state.push_log(
+                    log::Level::Warn,
+                    format!("Script du monde manquant `{stored_path}` : {error}"),
+                ),
             }
         }
         let mut script_updates = Vec::new();
         for (scene_index, object_id, stored_path) in script_references {
             let stored = std::path::Path::new(&stored_path);
-            let source_path = if stored.is_absolute() { stored.to_owned() } else { source_root.join(stored) };
+            let source_path = if stored.is_absolute() {
+                stored.to_owned()
+            } else {
+                source_root.join(stored)
+            };
             let source = match source_path.canonicalize() {
                 Ok(source) => source,
                 Err(error) => {
-                    self.state.push_log(log::Level::Warn,
-                        format!("Script Python manquant `{stored_path}` : {error}"));
+                    self.state.push_log(
+                        log::Level::Warn,
+                        format!("Script Python manquant `{stored_path}` : {error}"),
+                    );
                     continue;
                 }
             };
@@ -2394,10 +3182,16 @@ impl EditorApp {
                 let destination = copy_asset_to_directory(&source, &target_scripts_dir)?;
                 scripts_prefix.join(destination.file_name().unwrap_or_default())
             };
-            script_updates.push((scene_index, object_id, relative.to_string_lossy().replace('\\', "/")));
+            script_updates.push((
+                scene_index,
+                object_id,
+                relative.to_string_lossy().replace('\\', "/"),
+            ));
         }
         for (scene_index, object_id, relative) in script_updates {
-            if let Some(object) = self.state.project.world.scenes[scene_index].get_object_mut(object_id) {
+            if let Some(object) =
+                self.state.project.world.scenes[scene_index].get_object_mut(object_id)
+            {
                 object.script = Some(relative);
             }
         }
@@ -2408,7 +3202,10 @@ impl EditorApp {
         self.project_path = Some(path.clone());
         self.saved_project_snapshot = canonical_project_snapshot(&self.state.project);
         self.remember_recent_project(&path);
-        self.state.push_log(log::Level::Info, format!("Projet sauvegardé : {}", path.display()));
+        self.state.push_log(
+            log::Level::Info,
+            format!("Projet sauvegardé : {}", path.display()),
+        );
         Ok(())
     }
 
@@ -2416,9 +3213,18 @@ impl EditorApp {
         if self.export_receiver.is_some() {
             return;
         }
-        if !self.state.project.world.script.as_ref().is_some_and(|script| !script.trim().is_empty()) {
-            self.state.push_log(log::Level::Error,
-                "Export impossible : définis d'abord le script du monde dans le menu Monde.".into());
+        if !self
+            .state
+            .project
+            .world
+            .script
+            .as_ref()
+            .is_some_and(|script| !script.trim().is_empty())
+        {
+            self.state.push_log(
+                log::Level::Error,
+                "Export impossible : définis d'abord le script du monde dans le menu Monde.".into(),
+            );
             return;
         }
 
@@ -2429,31 +3235,41 @@ impl EditorApp {
                 Ok(Some(path)) => path,
                 Ok(None) => return,
                 Err(error) => {
-                    self.state.push_log(log::Level::Error, format!("Sélecteur de projet : {error}"));
+                    self.state
+                        .push_log(log::Level::Error, format!("Sélecteur de projet : {error}"));
                     return;
                 }
             }
         };
-        let stem = project_path.file_stem().and_then(|name| name.to_str()).unwrap_or("jeu");
+        let stem = project_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("jeu");
         let default_zip_name = format!("{stem}-windows.zip");
         let output_path = match choose_export_file(&default_zip_name) {
             Ok(Some(path)) => path,
             Ok(None) => return,
             Err(error) => {
-                self.state.push_log(log::Level::Error, format!("Sélecteur d'export : {error}"));
+                self.state
+                    .push_log(log::Level::Error, format!("Sélecteur d'export : {error}"));
                 return;
             }
         };
         if let Err(error) = self.save_scene(&project_path) {
-            self.state.push_log(log::Level::Error, format!("Sauvegarde avant export : {error}"));
+            self.state.push_log(
+                log::Level::Error,
+                format!("Sauvegarde avant export : {error}"),
+            );
             return;
         }
         let project_path = self.project_path.clone().unwrap_or(project_path);
         let script_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../scripts/export_game.py");
         if !script_path.is_file() {
-            self.state.push_log(log::Level::Error, format!(
-                "Script d'export introuvable : {}", script_path.display()));
+            self.state.push_log(
+                log::Level::Error,
+                format!("Script d'export introuvable : {}", script_path.display()),
+            );
             return;
         }
 
@@ -2461,8 +3277,14 @@ impl EditorApp {
         self.export_receiver = Some(receiver);
         self.export_status = Some("Export du jeu en cours…".into());
         self.show_log = true;
-        self.state.push_log(log::Level::Info, format!(
-            "Export du jeu démarré : {} → {}", project_path.display(), output_path.display()));
+        self.state.push_log(
+            log::Level::Info,
+            format!(
+                "Export du jeu démarré : {} → {}",
+                project_path.display(),
+                output_path.display()
+            ),
+        );
         std::thread::spawn(move || {
             let result = std::process::Command::new("python")
                 .arg(script_path)
@@ -2475,18 +3297,35 @@ impl EditorApp {
                 .and_then(|output| {
                     if output.status.success() {
                         match std::fs::metadata(&output_path) {
-                            Ok(metadata) if metadata.is_file() && metadata.len() > 0 => Ok(output_path),
-                            Ok(_) => Err(format!("L'exporteur n'a pas produit d'archive valide : {}", output_path.display())),
-                            Err(error) => Err(format!("Archive annoncée comme exportée mais introuvable : {error}")),
+                            Ok(metadata) if metadata.is_file() && metadata.len() > 0 => {
+                                Ok(output_path)
+                            }
+                            Ok(_) => Err(format!(
+                                "L'exporteur n'a pas produit d'archive valide : {}",
+                                output_path.display()
+                            )),
+                            Err(error) => Err(format!(
+                                "Archive annoncée comme exportée mais introuvable : {error}"
+                            )),
                         }
                     } else {
                         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
                         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
                         let mut details = Vec::new();
-                        if !stdout.is_empty() { details.push(format!("stdout: {stdout}")); }
-                        if !stderr.is_empty() { details.push(format!("stderr: {stderr}")); }
-                        if details.is_empty() { details.push("aucun détail fourni par l'exporteur".into()); }
-                        Err(format!("{} (code {:?})", details.join(" | "), output.status.code()))
+                        if !stdout.is_empty() {
+                            details.push(format!("stdout: {stdout}"));
+                        }
+                        if !stderr.is_empty() {
+                            details.push(format!("stderr: {stderr}"));
+                        }
+                        if details.is_empty() {
+                            details.push("aucun détail fourni par l'exporteur".into());
+                        }
+                        Err(format!(
+                            "{} (code {:?})",
+                            details.join(" | "),
+                            output.status.code()
+                        ))
                     }
                 });
             let _ = sender.send(result);
@@ -2495,7 +3334,9 @@ impl EditorApp {
 
     fn save_editor_settings(&self) -> anyhow::Result<()> {
         let path = editor_settings_path()?;
-        let parent = path.parent().ok_or_else(|| anyhow::anyhow!("Dossier de configuration introuvable"))?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Dossier de configuration introuvable"))?;
         std::fs::create_dir_all(parent)?;
         std::fs::write(path, serde_json::to_vec_pretty(&self.editor_settings)?)?;
         Ok(())
@@ -2504,11 +3345,20 @@ impl EditorApp {
     fn create_project_file(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         validate_project_entry_name(path.file_name().and_then(|name| name.to_str()))?;
         let path = resolve_project_browser_path(self.project_path.as_deref(), path)?;
-        let current = self.left_panel.current_browser_directory()
-            .ok_or_else(|| anyhow::anyhow!("Dossier courant introuvable"))?.canonicalize()?;
-        anyhow::ensure!(path.parent() == Some(current.as_path()), "Le fichier doit être créé dans le dossier affiché");
+        let current = self
+            .left_panel
+            .current_browser_directory()
+            .ok_or_else(|| anyhow::anyhow!("Dossier courant introuvable"))?
+            .canonicalize()?;
+        anyhow::ensure!(
+            path.parent() == Some(current.as_path()),
+            "Le fichier doit être créé dans le dossier affiché"
+        );
         anyhow::ensure!(!path.exists(), "Un élément portant ce nom existe déjà");
-        std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
         self.left_panel.refresh_file_browser();
         Ok(())
     }
@@ -2516,37 +3366,58 @@ impl EditorApp {
     fn create_project_directory(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
         validate_project_entry_name(path.file_name().and_then(|name| name.to_str()))?;
         let path = resolve_project_browser_path(self.project_path.as_deref(), path)?;
-        let current = self.left_panel.current_browser_directory()
-            .ok_or_else(|| anyhow::anyhow!("Dossier courant introuvable"))?.canonicalize()?;
-        anyhow::ensure!(path.parent() == Some(current.as_path()), "Le dossier doit être créé dans le dossier affiché");
+        let current = self
+            .left_panel
+            .current_browser_directory()
+            .ok_or_else(|| anyhow::anyhow!("Dossier courant introuvable"))?
+            .canonicalize()?;
+        anyhow::ensure!(
+            path.parent() == Some(current.as_path()),
+            "Le dossier doit être créé dans le dossier affiché"
+        );
         anyhow::ensure!(!path.exists(), "Un élément portant ce nom existe déjà");
         std::fs::create_dir(&path)?;
         self.left_panel.refresh_file_browser();
         Ok(())
     }
 
-    fn rename_project_path(&mut self, old: &std::path::Path, new: &std::path::Path) -> anyhow::Result<()> {
+    fn rename_project_path(
+        &mut self,
+        old: &std::path::Path,
+        new: &std::path::Path,
+    ) -> anyhow::Result<()> {
         validate_project_entry_name(new.file_name().and_then(|name| name.to_str()))?;
-        let root = self.project_path.as_deref()
+        let root = self
+            .project_path
+            .as_deref()
             .and_then(std::path::Path::parent)
             .ok_or_else(|| anyhow::anyhow!("Aucun projet n'est ouvert"))?
             .canonicalize()?;
         let old = resolve_project_browser_path(self.project_path.as_deref(), old)?;
         let new = resolve_project_browser_path(self.project_path.as_deref(), new)?;
         anyhow::ensure!(old != root, "Impossible de renommer la racine du projet");
-        anyhow::ensure!(new.parent() == old.parent(), "Le renommage doit rester dans le dossier d'origine");
+        anyhow::ensure!(
+            new.parent() == old.parent(),
+            "Le renommage doit rester dans le dossier d'origine"
+        );
         anyhow::ensure!(!new.exists(), "Un élément portant ce nom existe déjà");
 
         let mut texture_updates = Vec::new();
         let mut script_updates = Vec::new();
         for (scene_index, scene) in self.state.project.world.scenes.iter().enumerate() {
             for object in scene.objects.values() {
-                let asset_path = object.asset_path.as_deref()
+                let asset_path = object
+                    .asset_path
+                    .as_deref()
                     .and_then(|path| remap_project_reference(path, &root, &old, &new));
-                let texture_property = object.properties.get("texture")
+                let texture_property = object
+                    .properties
+                    .get("texture")
                     .and_then(world::object::PropValue::as_str)
                     .and_then(|path| remap_project_reference(path, &root, &old, &new));
-                let script = object.script.as_deref()
+                let script = object
+                    .script
+                    .as_deref()
                     .and_then(|path| remap_project_reference(path, &root, &old, &new));
                 if asset_path.is_some() || texture_property.is_some() {
                     texture_updates.push((scene_index, object.id, asset_path, texture_property));
@@ -2556,25 +3427,45 @@ impl EditorApp {
                 }
             }
         }
-        let world_script = self.state.project.world.script.as_deref()
+        let world_script = self
+            .state
+            .project
+            .world
+            .script
+            .as_deref()
             .and_then(|path| remap_project_reference(path, &root, &old, &new));
-        let tile_texture_updates: Vec<(u16, String)> = self.state.project.tile_definitions.iter()
-            .filter_map(|tile| tile.texture.as_deref()
-                .and_then(|path| remap_project_reference(path, &root, &old, &new))
-                .map(|path| (tile.id, path)))
+        let tile_texture_updates: Vec<(u16, String)> = self
+            .state
+            .project
+            .tile_definitions
+            .iter()
+            .filter_map(|tile| {
+                tile.texture
+                    .as_deref()
+                    .and_then(|path| remap_project_reference(path, &root, &old, &new))
+                    .map(|path| (tile.id, path))
+            })
             .collect();
 
         std::fs::rename(&old, &new)?;
         for (scene_index, object_id, asset_path, texture) in texture_updates {
-            if let Some(object) = self.state.project.world.scenes[scene_index].get_object_mut(object_id) {
-                if let Some(path) = asset_path { object.asset_path = Some(path); }
+            if let Some(object) =
+                self.state.project.world.scenes[scene_index].get_object_mut(object_id)
+            {
+                if let Some(path) = asset_path {
+                    object.asset_path = Some(path);
+                }
                 if let Some(path) = texture {
-                    object.properties.insert("texture".to_owned(), world::object::PropValue::Str(path));
+                    object
+                        .properties
+                        .insert("texture".to_owned(), world::object::PropValue::Str(path));
                 }
             }
         }
         for (scene_index, object_id, script) in script_updates {
-            if let Some(object) = self.state.project.world.scenes[scene_index].get_object_mut(object_id) {
+            if let Some(object) =
+                self.state.project.world.scenes[scene_index].get_object_mut(object_id)
+            {
                 object.script = Some(script);
             }
         }
@@ -2582,7 +3473,13 @@ impl EditorApp {
             self.state.project.world.script = Some(script);
         }
         for (tile_id, texture) in tile_texture_updates {
-            if let Some(tile) = self.state.project.tile_definitions.iter_mut().find(|tile| tile.id == tile_id) {
+            if let Some(tile) = self
+                .state
+                .project
+                .tile_definitions
+                .iter_mut()
+                .find(|tile| tile.id == tile_id)
+            {
                 tile.texture = Some(texture);
             }
         }
@@ -2591,27 +3488,45 @@ impl EditorApp {
             let json = self.state.project.to_json()?;
             std::fs::write(&project_file, json)?;
             write_tile_definition_files(&project_file, &self.state.project.tile_definitions)?;
-            self.state.push_log(log::Level::Info,
-                format!("Références mises à jour après renommage : {}", project_file.display()));
+            self.state.push_log(
+                log::Level::Info,
+                format!(
+                    "Références mises à jour après renommage : {}",
+                    project_file.display()
+                ),
+            );
         }
         Ok(())
     }
 
     fn delete_project_path(&mut self, requested: &std::path::Path) -> anyhow::Result<()> {
-        let project_file = self.project_path.as_deref()
+        let project_file = self
+            .project_path
+            .as_deref()
             .ok_or_else(|| anyhow::anyhow!("Aucun projet n'est ouvert"))?;
         let browser_root = project_browser_directory(project_file)?.canonicalize()?;
         let target = resolve_project_browser_path(Some(project_file), requested)?;
-        anyhow::ensure!(target != browser_root, "Impossible de supprimer la racine du projet");
+        anyhow::ensure!(
+            target != browser_root,
+            "Impossible de supprimer la racine du projet"
+        );
         anyhow::ensure!(target.exists(), "Le fichier ou dossier n'existe plus");
 
         let deleted_path = target.canonicalize()?;
-        let project_root = project_file.parent()
-            .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?.canonicalize()?;
+        let project_root = project_file
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?
+            .canonicalize()?;
         let referenced = |stored: &str| {
             let path = std::path::Path::new(stored);
-            let resolved = if path.is_absolute() { path.to_path_buf() } else { project_root.join(path) };
-            resolved.canonicalize().is_ok_and(|resolved| resolved.starts_with(&deleted_path))
+            let resolved = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                project_root.join(path)
+            };
+            resolved
+                .canonicalize()
+                .is_ok_and(|resolved| resolved.starts_with(&deleted_path))
         };
 
         for scene in &mut self.state.project.world.scenes {
@@ -2619,7 +3534,12 @@ impl EditorApp {
                 if object.asset_path.as_deref().is_some_and(referenced) {
                     object.asset_path = None;
                 }
-                if object.properties.get("texture").and_then(world::object::PropValue::as_str).is_some_and(referenced) {
+                if object
+                    .properties
+                    .get("texture")
+                    .and_then(world::object::PropValue::as_str)
+                    .is_some_and(referenced)
+                {
                     object.properties.remove("texture");
                 }
                 if object.script.as_deref().is_some_and(referenced) {
@@ -2627,7 +3547,14 @@ impl EditorApp {
                 }
             }
         }
-        if self.state.project.world.script.as_deref().is_some_and(referenced) {
+        if self
+            .state
+            .project
+            .world
+            .script
+            .as_deref()
+            .is_some_and(referenced)
+        {
             self.state.project.world.script = None;
         }
         for tile in &mut self.state.project.tile_definitions {
@@ -2649,8 +3576,11 @@ impl EditorApp {
     }
 
     fn import_texture(&self, selected: &std::path::Path) -> anyhow::Result<String> {
-        let extension = selected.extension().and_then(|value| value.to_str())
-            .unwrap_or_default().to_ascii_lowercase();
+        let extension = selected
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif") {
             anyhow::bail!("Formats acceptés : PNG, JPEG et GIF");
         }
@@ -2672,14 +3602,19 @@ impl EditorApp {
 
         let destination = copy_asset_to_directory(&source, &asset_dir)?;
         let relative = project_asset_prefix(project_file)?.join(
-            destination.file_name().ok_or_else(|| anyhow::anyhow!("Nom de fichier invalide"))?,
+            destination
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("Nom de fichier invalide"))?,
         );
         Ok(relative.to_string_lossy().replace('\\', "/"))
     }
 
     fn import_script(&self, selected: &std::path::Path) -> anyhow::Result<String> {
-        if !selected.extension().and_then(|value| value.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("py")) {
+        if !selected
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("py"))
+        {
             anyhow::bail!("Le fichier doit avoir l'extension .py");
         }
         let source = selected.canonicalize()?;
@@ -2706,9 +3641,18 @@ impl EditorApp {
 
     fn create_object_script(&self, selected: &std::path::Path) -> anyhow::Result<String> {
         validate_python_script_path(selected)?;
-        if let Some(parent) = selected.parent() { std::fs::create_dir_all(parent)?; }
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(selected)
-            .map_err(|error| anyhow::anyhow!("Impossible de créer le fichier (il existe peut-être déjà) : {error}"))?;
+        if let Some(parent) = selected.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(selected)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "Impossible de créer le fichier (il existe peut-être déjà) : {error}"
+                )
+            })?;
         use std::io::Write;
         file.write_all(OBJECT_SCRIPT_TEMPLATE.as_bytes())?;
         self.import_script(selected)
@@ -2716,8 +3660,11 @@ impl EditorApp {
 
     fn assign_world_script(&mut self, selected: &std::path::Path) -> anyhow::Result<()> {
         let source = selected.canonicalize()?;
-        if !source.extension().and_then(|value| value.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("py")) {
+        if !source
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("py"))
+        {
             anyhow::bail!("Le fichier doit avoir l'extension .py");
         }
         ensure_world_script_entrypoints(&source)?;
@@ -2726,13 +3673,25 @@ impl EditorApp {
     }
 
     fn create_world_script(&mut self, selected: &std::path::Path) -> anyhow::Result<()> {
-        if !selected.extension().and_then(|value| value.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("py")) {
+        if !selected
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("py"))
+        {
             anyhow::bail!("Le fichier doit avoir l'extension .py");
         }
-        if let Some(parent) = selected.parent() { std::fs::create_dir_all(parent)?; }
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(selected)
-            .map_err(|error| anyhow::anyhow!("Impossible de créer le fichier (il existe peut-être déjà) : {error}"))?;
+        if let Some(parent) = selected.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(selected)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "Impossible de créer le fichier (il existe peut-être déjà) : {error}"
+                )
+            })?;
         use std::io::Write;
         file.write_all(WORLD_SCRIPT_TEMPLATE.as_bytes())?;
         self.state.project.world.script = Some(self.import_script(selected)?);
@@ -2759,14 +3718,21 @@ impl EditorApp {
         if let Err(error) = load_tile_definition_files(path, &mut project) {
             anyhow::bail!("Impossible de charger les définitions de tuiles du projet : {error}");
         }
-        let scene_names: Vec<String> = project.world.scenes.iter()
-            .map(|scene| scene.meta.name.clone()).collect();
+        let scene_names: Vec<String> = project
+            .world
+            .scenes
+            .iter()
+            .map(|scene| scene.meta.name.clone())
+            .collect();
         synchronize_custom_object_instances(
             &mut project.world.scenes,
             &project.object_types,
             &scene_names,
         );
         self.state.project = project;
+        self.scene_view.clear_scene_views();
+        let active_scene_name = self.state.active_scene().meta.name.clone();
+        self.scene_view.activate_scene_view(&active_scene_name);
         self.state.selected = None;
         self.scene_view.selected_object = None;
         self.scene_view.selected_tiles.clear();
@@ -2779,7 +3745,10 @@ impl EditorApp {
         if !self.player_mode {
             self.remember_recent_project(path);
         }
-        self.state.push_log(log::Level::Info, format!("Projet chargé : {}", path.display()));
+        self.state.push_log(
+            log::Level::Info,
+            format!("Projet chargé : {}", path.display()),
+        );
         Ok(())
     }
 
@@ -2793,12 +3762,16 @@ impl EditorApp {
             }
         };
         let path = path.to_string_lossy().into_owned();
-        self.editor_settings.recent_projects.retain(|recent| recent != &path);
+        self.editor_settings
+            .recent_projects
+            .retain(|recent| recent != &path);
         self.editor_settings.recent_projects.insert(0, path);
         self.editor_settings.recent_projects.truncate(10);
         if let Err(error) = self.save_editor_settings() {
-            self.state.push_log(log::Level::Warn,
-                format!("Enregistrement des projets récents : {error}"));
+            self.state.push_log(
+                log::Level::Warn,
+                format!("Enregistrement des projets récents : {error}"),
+            );
         }
     }
 
@@ -2812,57 +3785,104 @@ impl EditorApp {
         recent.insert(0, path.to_owned());
         recent.truncate(12);
         if let Err(error) = self.save_editor_settings() {
-            self.state.push_log(log::Level::Warn,
-                format!("Enregistrement des assets récents : {error}"));
+            self.state.push_log(
+                log::Level::Warn,
+                format!("Enregistrement des assets récents : {error}"),
+            );
         }
     }
 
     /// Charge un script Python dans le runtime.
     pub fn load_script(&mut self, path: &std::path::Path) -> anyhow::Result<()> {
-        self.state.script_runtime.load_script(path)
+        self.state
+            .script_runtime
+            .load_script(path)
             .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     fn load_world_script(&mut self) -> anyhow::Result<()> {
-        let Some(script_path) = self.state.project.world.script.clone()
-            .filter(|path| !path.trim().is_empty()) else {
-                anyhow::bail!("Aucun script n'est défini pour ce monde")
-            };
-        let root = self.project_path.as_ref()
+        let Some(script_path) = self
+            .state
+            .project
+            .world
+            .script
+            .clone()
+            .filter(|path| !path.trim().is_empty())
+        else {
+            anyhow::bail!("Aucun script n'est défini pour ce monde")
+        };
+        let root = self
+            .project_path
+            .as_ref()
             .and_then(|path| path.parent())
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let path = std::path::Path::new(&script_path);
-        let resolved = if path.is_absolute() { path.to_owned() } else { root.join(path) };
-        self.state.script_runtime.load_world_script(&resolved)
+        let resolved = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            root.join(path)
+        };
+        self.state
+            .script_runtime
+            .load_world_script(&resolved)
             .map_err(|error| anyhow::anyhow!("Chargement de `{script_path}` : {error}"))
     }
 
     fn load_object_scripts(&mut self) -> anyhow::Result<()> {
-        let root = self.project_path.as_ref()
+        let root = self
+            .project_path
+            .as_ref()
             .and_then(|path| path.parent())
             .map(std::path::Path::to_path_buf)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        let scripts: Vec<(String, String)> = self.state.project.world.scenes.iter()
+        let scripts: Vec<(String, String)> = self
+            .state
+            .project
+            .world
+            .scenes
+            .iter()
             .flat_map(|scene| scene.objects.values())
-            .filter_map(|object| object.script.as_ref().filter(|path| !path.trim().is_empty())
-                .map(|path| (object.id.to_string(), path.clone())))
+            .filter_map(|object| {
+                object
+                    .script
+                    .as_ref()
+                    .filter(|path| !path.trim().is_empty())
+                    .map(|path| (object.id.to_string(), path.clone()))
+            })
             .collect();
         let mut errors = Vec::new();
         for (object_id, script_path) in scripts {
             let path = std::path::Path::new(&script_path);
-            let resolved = if path.is_absolute() { path.to_owned() } else { root.join(path) };
-            log::info!("Chargement du script objet {} : {}", object_id, resolved.display());
-            if let Err(error) = self.state.script_runtime.load_object_script(&resolved, object_id) {
-                self.state.push_log(log::Level::Error,
-                    format!("Chargement du script d'objet `{script_path}` : {error}"));
+            let resolved = if path.is_absolute() {
+                path.to_owned()
+            } else {
+                root.join(path)
+            };
+            log::info!(
+                "Chargement du script objet {} : {}",
+                object_id,
+                resolved.display()
+            );
+            if let Err(error) = self
+                .state
+                .script_runtime
+                .load_object_script(&resolved, object_id)
+            {
+                self.state.push_log(
+                    log::Level::Error,
+                    format!("Chargement du script d'objet `{script_path}` : {error}"),
+                );
                 errors.push(format!("{script_path} : {error}"));
             }
         }
         if errors.is_empty() {
             Ok(())
         } else {
-            anyhow::bail!("Impossible de charger les scripts d'objet : {}", errors.join("; "))
+            anyhow::bail!(
+                "Impossible de charger les scripts d'objet : {}",
+                errors.join("; ")
+            )
         }
     }
 }
@@ -2874,13 +3894,25 @@ fn canonical_project_snapshot(project: &Project) -> Option<String> {
 
 fn recent_asset_exists(root: &std::path::Path, stored_path: &str, extensions: &[&str]) -> bool {
     let stored = std::path::Path::new(stored_path);
-    let extension_matches = stored.extension().and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extensions.iter().any(|allowed| extension.eq_ignore_ascii_case(allowed)));
-    extension_matches && if stored.is_absolute() { stored.is_file() } else { root.join(stored).is_file() }
+    let extension_matches = stored
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extensions
+                .iter()
+                .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+        });
+    extension_matches
+        && if stored.is_absolute() {
+            stored.is_file()
+        } else {
+            root.join(stored).is_file()
+        }
 }
 
 fn with_project_extension(path: &std::path::Path) -> std::path::PathBuf {
-    let has_extension = path.extension()
+    let has_extension = path
+        .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("isomaker"));
     if has_extension {
@@ -2894,8 +3926,11 @@ const WORLD_SCRIPT_TEMPLATE: &str = "from __future__ import annotations\nfrom ty
 const OBJECT_SCRIPT_TEMPLATE: &str = "from __future__ import annotations\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from engine_api import GameContext, GameObject\n\n\ndef _on_game_launch(game: GameContext) -> None:\n    \"\"\"Called once when the game starts.\"\"\"\n    # Object id: game.object_id; tile position: game.x, game.y, game.z\n    pass\n\n\ndef _on_update(game: GameContext, delta_time: float) -> None:\n    \"\"\"Called on each game update.\"\"\"\n    # Use game.move_self(x, y), game.destroy_self(), or game.set_self_property(...).\n    pass\n";
 
 fn validate_python_script_path(path: &std::path::Path) -> anyhow::Result<()> {
-    if !path.extension().and_then(|value| value.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("py")) {
+    if !path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("py"))
+    {
         anyhow::bail!("Le fichier doit avoir l'extension .py");
     }
     Ok(())
@@ -2921,17 +3956,22 @@ fn editor_settings_path() -> anyhow::Result<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     let config_root = std::env::var_os("APPDATA")
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("USERPROFILE").map(|path| {
-            std::path::PathBuf::from(path).join("AppData").join("Roaming")
-        }));
+        .or_else(|| {
+            std::env::var_os("USERPROFILE").map(|path| {
+                std::path::PathBuf::from(path)
+                    .join("AppData")
+                    .join("Roaming")
+            })
+        });
     #[cfg(not(target_os = "windows"))]
     let config_root = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|path| {
-            std::path::PathBuf::from(path).join(".config")
-        }));
+        .or_else(|| {
+            std::env::var_os("HOME").map(|path| std::path::PathBuf::from(path).join(".config"))
+        });
 
-    let config_root = config_root.ok_or_else(|| anyhow::anyhow!("Dossier de configuration utilisateur introuvable"))?;
+    let config_root = config_root
+        .ok_or_else(|| anyhow::anyhow!("Dossier de configuration utilisateur introuvable"))?;
     Ok(config_root.join("MoteurDeJeu").join("editor_settings.json"))
 }
 
@@ -2962,7 +4002,10 @@ fn validate_project_entry_name(name: Option<&str>) -> anyhow::Result<()> {
         !name.is_empty()
             && name != "."
             && name != ".."
-            && !name.chars().any(|character| matches!(character, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
+            && !name.chars().any(|character| matches!(
+                character,
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+            ))
             && !name.ends_with(' ')
             && !name.ends_with('.'),
         "Nom invalide ou séparateurs interdits"
@@ -2976,16 +4019,30 @@ fn resolve_project_browser_path(
 ) -> anyhow::Result<std::path::PathBuf> {
     let root = project_browser_directory(
         project_file.ok_or_else(|| anyhow::anyhow!("Aucun projet n'est ouvert"))?,
-    )?.canonicalize()?;
-    let requested = if requested.is_absolute() { requested.to_path_buf() } else { root.join(requested) };
+    )?
+    .canonicalize()?;
+    let requested = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
     let resolved = if requested.exists() {
         requested.canonicalize()?
     } else {
-        let parent = requested.parent().ok_or_else(|| anyhow::anyhow!("Chemin de destination invalide"))?
+        let parent = requested
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Chemin de destination invalide"))?
             .canonicalize()?;
-        parent.join(requested.file_name().ok_or_else(|| anyhow::anyhow!("Nom de fichier invalide"))?)
+        parent.join(
+            requested
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("Nom de fichier invalide"))?,
+        )
     };
-    anyhow::ensure!(resolved.starts_with(&root), "Le gestionnaire ne peut agir qu'à l'intérieur du dossier du projet");
+    anyhow::ensure!(
+        resolved.starts_with(&root),
+        "Le gestionnaire ne peut agir qu'à l'intérieur du dossier du projet"
+    );
     Ok(resolved)
 }
 
@@ -2997,11 +4054,20 @@ fn remap_project_reference(
 ) -> Option<String> {
     let stored_path = std::path::Path::new(stored);
     let was_absolute = stored_path.is_absolute();
-    let resolved = if was_absolute { stored_path.to_path_buf() } else { root.join(stored_path) }
-        .canonicalize().ok()?;
+    let resolved = if was_absolute {
+        stored_path.to_path_buf()
+    } else {
+        root.join(stored_path)
+    }
+    .canonicalize()
+    .ok()?;
     let suffix = resolved.strip_prefix(old).ok()?;
     let remapped = new.join(suffix);
-    let stored_remapped = if was_absolute { remapped } else { remapped.strip_prefix(root).ok()?.to_path_buf() };
+    let stored_remapped = if was_absolute {
+        remapped
+    } else {
+        remapped.strip_prefix(root).ok()?.to_path_buf()
+    };
     Some(stored_remapped.to_string_lossy().replace('\\', "/"))
 }
 
@@ -3009,7 +4075,11 @@ fn remap_project_reference(
 fn open_file_with_default_app(path: &std::path::Path) -> anyhow::Result<()> {
     use std::{ffi::c_void, os::windows::ffi::OsStrExt};
     let operation: Vec<u16> = "open\0".encode_utf16().collect();
-    let file: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let file: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
     #[link(name = "shell32")]
     unsafe extern "system" {
         fn ShellExecuteW(
@@ -3022,8 +4092,14 @@ fn open_file_with_default_app(path: &std::path::Path) -> anyhow::Result<()> {
         ) -> isize;
     }
     let result = unsafe {
-        ShellExecuteW(std::ptr::null_mut(), operation.as_ptr(), file.as_ptr(),
-            std::ptr::null(), std::ptr::null(), 1)
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        )
     };
     anyhow::ensure!(result > 32, "Windows n'a pas pu ouvrir {}", path.display());
     Ok(())
@@ -3040,45 +4116,55 @@ fn open_file_with_default_app(path: &std::path::Path) -> anyhow::Result<()> {
 }
 
 fn project_asset_directory(project_file: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    let parent = project_file.parent()
+    let parent = project_file
+        .parent()
         .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?;
-    let stem = project_file.file_stem()
+    let stem = project_file
+        .file_stem()
         .ok_or_else(|| anyhow::anyhow!("Nom de projet invalide"))?;
     Ok(parent.join(stem).join("assets"))
 }
 
 fn project_browser_directory(project_file: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    let parent = project_file.parent()
+    let parent = project_file
+        .parent()
         .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?;
-    let stem = project_file.file_stem()
+    let stem = project_file
+        .file_stem()
         .ok_or_else(|| anyhow::anyhow!("Nom de projet invalide"))?;
     Ok(parent.join(stem))
 }
 
 fn project_asset_prefix(project_file: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    let stem = project_file.file_stem()
+    let stem = project_file
+        .file_stem()
         .ok_or_else(|| anyhow::anyhow!("Nom de projet invalide"))?;
     Ok(std::path::PathBuf::from(stem).join("assets"))
 }
 
 fn project_script_directory(project_file: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    let parent = project_file.parent()
+    let parent = project_file
+        .parent()
         .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?;
-    let stem = project_file.file_stem()
+    let stem = project_file
+        .file_stem()
         .ok_or_else(|| anyhow::anyhow!("Nom de projet invalide"))?;
     Ok(parent.join(stem).join("scripts"))
 }
 
 fn project_script_prefix(project_file: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    let stem = project_file.file_stem()
+    let stem = project_file
+        .file_stem()
         .ok_or_else(|| anyhow::anyhow!("Nom de projet invalide"))?;
     Ok(std::path::PathBuf::from(stem).join("scripts"))
 }
 
 fn project_tile_directory(project_file: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    let parent = project_file.parent()
+    let parent = project_file
+        .parent()
         .ok_or_else(|| anyhow::anyhow!("Dossier du projet introuvable"))?;
-    let stem = project_file.file_stem()
+    let stem = project_file
+        .file_stem()
         .ok_or_else(|| anyhow::anyhow!("Nom de projet invalide"))?;
     Ok(parent.join(stem).join("tiles"))
 }
@@ -3093,11 +4179,22 @@ fn write_tile_definition_files(
     for entry in std::fs::read_dir(&directory)? {
         let entry = entry?;
         let path = entry.path();
-        if !path.is_file() || !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("json")) {
+        if !path.is_file()
+            || !path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
             continue;
         }
-        let Some(file_stem) = path.file_stem().and_then(|stem| stem.to_str()) else { continue };
-        let Some(id) = file_stem.strip_prefix("tile-").and_then(|id| id.parse::<u16>().ok()) else { continue };
+        let Some(file_stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let Some(id) = file_stem
+            .strip_prefix("tile-")
+            .and_then(|id| id.parse::<u16>().ok())
+        else {
+            continue;
+        };
         if !active_ids.contains(&id) {
             std::fs::remove_file(path)?;
         }
@@ -3111,25 +4208,39 @@ fn write_tile_definition_files(
 
 fn remove_tile_definition_from_scene(scene: &mut Scene, tile_id: u16) -> Vec<TilePos> {
     let chunk_size = world::grid::CHUNK_SIZE;
-    let positions = scene.grid.chunks.iter()
+    let positions = scene
+        .grid
+        .chunks
+        .iter()
         .flat_map(|(&(chunk_x, chunk_y), chunk)| {
-            chunk.tiles.iter().enumerate().filter_map(move |(index, data)| {
-                (data.tile_type == tile_id || data.decoration == tile_id).then(|| {
-                    TilePos::new(
-                        chunk_x * chunk_size + index as i32 % chunk_size,
-                        chunk_y * chunk_size + index as i32 / chunk_size,
-                    )
+            chunk
+                .tiles
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, data)| {
+                    (data.tile_type == tile_id || data.decoration == tile_id).then(|| {
+                        TilePos::new(
+                            chunk_x * chunk_size + index as i32 % chunk_size,
+                            chunk_y * chunk_size + index as i32 / chunk_size,
+                        )
+                    })
                 })
-            })
         })
         .collect::<Vec<_>>();
 
     for &position in &positions {
         let mut data = scene.get_tile(position);
-        if data.tile_type == tile_id { data.tile_type = 0; }
-        if data.decoration == tile_id { data.decoration = 0; }
-        if data.is_empty() { scene.clear_tile(position); }
-        else { scene.set_tile(position, data); }
+        if data.tile_type == tile_id {
+            data.tile_type = 0;
+        }
+        if data.decoration == tile_id {
+            data.decoration = 0;
+        }
+        if data.is_empty() {
+            scene.clear_tile(position);
+        } else {
+            scene.set_tile(position, data);
+        }
     }
     positions
 }
@@ -3145,14 +4256,25 @@ fn load_tile_definition_files(
     let mut paths = std::fs::read_dir(directory)?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("json")))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        })
         .collect::<Vec<_>>();
     paths.sort();
     for path in paths {
-        let definition: world::grid::TileDefinition = serde_json::from_slice(&std::fs::read(&path)?)
-            .map_err(|error| anyhow::anyhow!("{} : {error}", path.display()))?;
-        anyhow::ensure!(definition.id != 0, "L'identifiant 0 est réservé à la tuile vide");
-        if let Some(existing) = project.tile_definitions.iter_mut().find(|tile| tile.id == definition.id) {
+        let definition: world::grid::TileDefinition =
+            serde_json::from_slice(&std::fs::read(&path)?)
+                .map_err(|error| anyhow::anyhow!("{} : {error}", path.display()))?;
+        anyhow::ensure!(
+            definition.id != 0,
+            "L'identifiant 0 est réservé à la tuile vide"
+        );
+        if let Some(existing) = project
+            .tile_definitions
+            .iter_mut()
+            .find(|tile| tile.id == definition.id)
+        {
             *existing = definition;
         } else {
             project.tile_definitions.push(definition);
@@ -3167,11 +4289,15 @@ fn copy_asset_to_directory(
     destination_dir: &std::path::Path,
 ) -> anyhow::Result<std::path::PathBuf> {
     std::fs::create_dir_all(destination_dir)?;
-    let file_name = source.file_name()
+    let file_name = source
+        .file_name()
         .ok_or_else(|| anyhow::anyhow!("Nom de fichier invalide"))?;
     let mut destination = destination_dir.join(file_name);
     if destination.exists() {
-        let stem = source.file_stem().and_then(|value| value.to_str()).unwrap_or("asset");
+        let stem = source
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("asset");
         let extension = source.extension().and_then(|value| value.to_str());
         let mut index = 1u32;
         loop {
@@ -3180,7 +4306,9 @@ fn copy_asset_to_directory(
                 None => format!("{stem}_{index}"),
             };
             destination = destination_dir.join(candidate_name);
-            if !destination.exists() { break; }
+            if !destination.exists() {
+                break;
+            }
             index += 1;
         }
     }
@@ -3205,11 +4333,20 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 "#;
 
     let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", &script])
+        .args([
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
         .output()?;
     if !output.status.success() {
-        anyhow::bail!("Le sélecteur de texture Windows a échoué : {}",
-            String::from_utf8_lossy(&output.stderr).trim());
+        anyhow::bail!(
+            "Le sélecteur de texture Windows a échoué : {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
     let selected = String::from_utf8(output.stdout)?;
     let selected = selected.trim();
@@ -3236,15 +4373,28 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 }
 "#;
     let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            script,
+        ])
         .output()?;
     if !output.status.success() {
-        anyhow::bail!("Le sélecteur de texture Windows a échoué : {}",
-            String::from_utf8_lossy(&output.stderr).trim());
+        anyhow::bail!(
+            "Le sélecteur de texture Windows a échoué : {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
     let selected = String::from_utf8(output.stdout)?;
     let selected = selected.trim();
-    if selected.is_empty() { Ok(None) } else { Ok(Some(std::path::PathBuf::from(selected))) }
+    if selected.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(std::path::PathBuf::from(selected)))
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -3273,15 +4423,28 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 }
 "#;
     let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", &script])
+        .args([
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
         .output()?;
     if !output.status.success() {
-        anyhow::bail!("Le sélecteur de script Windows a échoué : {}",
-            String::from_utf8_lossy(&output.stderr).trim());
+        anyhow::bail!(
+            "Le sélecteur de script Windows a échoué : {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
     let selected = String::from_utf8(output.stdout)?;
     let selected = selected.trim();
-    if selected.is_empty() { Ok(None) } else { Ok(Some(std::path::PathBuf::from(selected))) }
+    if selected.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(std::path::PathBuf::from(selected)))
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -3305,17 +4468,31 @@ $dialog.RestoreDirectory = $true
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     [Console]::Out.Write($dialog.FileName)
 }
-"#.replace("{default_name}", default_name);
+"#
+    .replace("{default_name}", default_name);
     let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", &script])
+        .args([
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
         .output()?;
     if !output.status.success() {
-        anyhow::bail!("Le dialogue de création Windows a échoué : {}",
-            String::from_utf8_lossy(&output.stderr).trim());
+        anyhow::bail!(
+            "Le dialogue de création Windows a échoué : {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
     let selected = String::from_utf8(output.stdout)?;
     let selected = selected.trim();
-    if selected.is_empty() { Ok(None) } else { Ok(Some(std::path::PathBuf::from(selected))) }
+    if selected.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(std::path::PathBuf::from(selected)))
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -3358,11 +4535,20 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     };
 
     let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            script,
+        ])
         .output()?;
     if !output.status.success() {
-        anyhow::bail!("Le sélecteur de fichiers Windows a échoué : {}",
-            String::from_utf8_lossy(&output.stderr).trim());
+        anyhow::bail!(
+            "Le sélecteur de fichiers Windows a échoué : {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
     let selected = String::from_utf8(output.stdout)?;
     let selected = selected.trim();
@@ -3394,17 +4580,31 @@ $dialog.RestoreDirectory = $true
 if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
     [Console]::Out.Write($dialog.FileName)
 }
-"#.replace("{default_name}", &default_name.replace('\'', "''"));
+"#
+    .replace("{default_name}", &default_name.replace('\'', "''"));
     let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", &script])
+        .args([
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
         .output()?;
     if !output.status.success() {
-        anyhow::bail!("Le sélecteur d'export Windows a échoué : {}",
-            String::from_utf8_lossy(&output.stderr).trim());
+        anyhow::bail!(
+            "Le sélecteur d'export Windows a échoué : {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
     }
     let selected = String::from_utf8(output.stdout)?;
     let selected = selected.trim();
-    if selected.is_empty() { Ok(None) } else { Ok(Some(std::path::PathBuf::from(selected))) }
+    if selected.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(std::path::PathBuf::from(selected)))
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -3413,7 +4613,9 @@ fn choose_export_file(_default_name: &str) -> anyhow::Result<Option<std::path::P
 }
 
 impl Default for EditorApp {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -3434,7 +4636,8 @@ mod collision_and_tile_file_tests {
         let mut definition = TileDefinition::new(7, "Wall", [100, 100, 100, 255]);
         definition.has_collisions = true;
 
-        let moved = move_object_with_collisions(&mut scene, &[definition], id, TilePos::new(1, 0)).unwrap();
+        let moved =
+            move_object_with_collisions(&mut scene, &[definition], id, TilePos::new(1, 0)).unwrap();
         assert!(!moved);
         assert_eq!(scene.get_object(id).unwrap().tile_pos, TilePos::new(0, 0));
     }
@@ -3449,21 +4652,29 @@ mod collision_and_tile_file_tests {
         let obstacle_id = scene.spawn("Crate", ObjectType::Building, TilePos::new(3, 0));
         scene.get_object_mut(obstacle_id).unwrap().has_collisions = true;
 
-        assert!(!move_object_with_collisions(
-            &mut scene, &[], player_id, TilePos::new(2, 0),
-        ).unwrap());
-        assert!(move_object_with_collisions(
-            &mut scene, &[], player_id, TilePos::with_z(2, 0, 1),
-        ).unwrap());
-        assert_eq!(scene.get_object(player_id).unwrap().tile_pos, TilePos::with_z(2, 0, 1));
+        assert!(
+            !move_object_with_collisions(&mut scene, &[], player_id, TilePos::new(2, 0),).unwrap()
+        );
+        assert!(
+            move_object_with_collisions(&mut scene, &[], player_id, TilePos::with_z(2, 0, 1),)
+                .unwrap()
+        );
+        assert_eq!(
+            scene.get_object(player_id).unwrap().tile_pos,
+            TilePos::with_z(2, 0, 1)
+        );
     }
 
     #[test]
     fn tile_definition_files_are_project_scoped_and_loaded_over_embedded_defaults() {
         use std::time::{SystemTime, UNIX_EPOCH};
 
-        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let root = std::env::temp_dir().join(format!("isomaker_tiles_{}_{}", std::process::id(), nonce));
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("isomaker_tiles_{}_{}", std::process::id(), nonce));
         std::fs::create_dir_all(&root).unwrap();
         let project_file = root.join("sample.isomaker");
         let mut source = Project::new("Sample");
@@ -3476,8 +4687,14 @@ mod collision_and_tile_file_tests {
         write_tile_definition_files(&project_file, &source.tile_definitions).unwrap();
         let mut loaded = Project::new("Sample");
         load_tile_definition_files(&project_file, &mut loaded).unwrap();
-        assert_eq!(loaded.tile_definitions.iter().find(|tile| tile.id == 7), Some(&definition));
-        assert!(project_tile_directory(&project_file).unwrap().join("tile-00007.json").exists());
+        assert_eq!(
+            loaded.tile_definitions.iter().find(|tile| tile.id == 7),
+            Some(&definition)
+        );
+        assert!(project_tile_directory(&project_file)
+            .unwrap()
+            .join("tile-00007.json")
+            .exists());
 
         std::fs::remove_dir_all(root).unwrap();
     }

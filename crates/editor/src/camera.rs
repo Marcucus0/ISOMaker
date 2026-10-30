@@ -24,7 +24,9 @@ impl Default for Camera {
 }
 
 impl Camera {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Applique le zoom en gardant le point d'écran fixe (zoom centré sur la souris).
     pub fn zoom_at(&mut self, screen_point: egui::Vec2, delta: f32) {
@@ -32,8 +34,7 @@ impl Camera {
         // `smooth_scroll_delta` is measured in points and can exceed 100 for
         // one wheel notch. Exponential scaling keeps the response consistent
         // for both wheel mice and high-resolution trackpads.
-        self.zoom = (self.zoom * (delta * 0.001).exp())
-            .clamp(self.zoom_min, self.zoom_max);
+        self.zoom = (self.zoom * (delta * 0.001).exp()).clamp(self.zoom_min, self.zoom_max);
         // Keep the world point under the cursor fixed while changing zoom.
         self.position = anchor_world - screen_point / self.zoom;
     }

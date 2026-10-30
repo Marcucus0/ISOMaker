@@ -96,6 +96,10 @@ non vides sont réparties dans des chunks de 16 × 16 tuiles. Les objets ont un
 identifiant stable, une position logique, une empreinte, une couche, des
 propriétés et, éventuellement, un chemin de texture. Le script Python est
 associé au monde.
+Les noms d'objets sont uniques à l'intérieur d'une scène. À l'ajout ou au
+renommage, un doublon reçoit automatiquement le premier suffixe disponible,
+par exemple `Coffre`, `Coffre (1)`, `Coffre (2)`. Les identifiants restent
+l'identité stable utilisée par les scripts et les transferts entre scènes.
 
 Le fichier de projet est un JSON avec extension `.isomaker`. Enregistrer inclut
 l'ensemble du projet (monde et scènes), pas uniquement la scène affichée.
@@ -177,17 +181,25 @@ contrôle dédié dans l'UI.
 
 ## Interactions de l'éditeur
 
-- **Peindre / Gomme** : applique ou efface des tuiles sous le pointeur, y
-  compris pendant un glisser. Les raccourcis `F` et `G` activent respectivement
-  Peindre et Gomme quand l'éditeur est actif et qu'aucun champ texte n'a le focus.
+- **Peindre / Gomme / Remplir** : applique, efface ou remplit des tuiles. Les
+  raccourcis `F`, `G` et `A` activent respectivement Peindre, Gomme et Remplir
+  quand l'éditeur est actif et qu'aucun champ texte n'a le focus.
 - **Sélection** : sélectionne une tuile ou une zone logique. `Shift` sélectionne
   les objets compris dans le rectangle sans sélectionner ni teinter les tuiles.
   Les objets sélectionnés peuvent être copiés avec `Ctrl+C` et collés sous le
   pointeur avec `Ctrl+V` ; leurs propriétés et écarts relatifs sont conservés,
   mais chaque copie reçoit un nouvel identifiant. Le presse-papiers de l'éditeur
   persiste lors des changements de scène, ce qui permet le collage entre scènes
-  du même projet. Si aucun objet n'est sélectionné, le raccourci conserve le
+  du même projet. Une zone de tuiles sélectionnée se copie et se colle avec ses
+  dimensions, ses tuiles vides et décoratives, sans copier les objets placés
+  dessus. Le collage se fait à partir de la tuile survolée ; il fonctionne aussi
+  entre scènes du même projet. Un clic simple sur une tuile conserve le
   copier/coller d'une tuile seule.
+- **Ajout d'objet** : les objets génériques, les instances de types personnalisés
+  et les caméras sont créés sur une tuile sélectionnée, ou sur la tuile survolée
+  si aucune tuile n'est sélectionnée. Une commande déclenchée depuis un panneau
+  latéral utilise la dernière tuile survolée dans le viewport. Si aucune tuile
+  n'a encore été survolée, la position de départ reste `(0, 0)`.
 - **Déplacer** : déplace la zone sélectionnée avec un aperçu temporaire. Sans
   sélection, déplace l'objet touché, ou la tuile sous le pointeur. Les objets
   déplacés sont identifiés par leur empreinte visuelle.
@@ -226,7 +238,10 @@ contrôle dédié dans l'UI.
   préférences propres à l'application. Elles sont enregistrées séparément du
   projet dans `%APPDATA%/MoteurDeJeu/editor_settings.json`. L'option de masquage
   de la grille n'agit qu'en Lecture et en Pause ; la couleur de la grille y est
-  aussi réglable et sauvegardée.
+  aussi réglable et sauvegardée. Les options **Afficher les FPS par défaut**,
+  **Afficher le sélecteur de vue par défaut** et **Afficher les logs par défaut**
+  déterminent l'affichage à l'ouverture. Un projet `.isomaker` peut être choisi
+  comme projet à ouvrir automatiquement au prochain démarrage.
 - **Inspecteur** : sa largeur minimale est réduite ; les libellés restent sur
   une ligne et sont coupés au bord du panneau s'il devient trop étroit, sans
   ellipse ajoutée.
@@ -254,6 +269,9 @@ contrôle dédié dans l'UI.
   interpole position et zoom pour éviter les sauts lors des déplacements. Les caméras sont
   représentées par une icône dans l'éditeur et ne sont pas dessinées comme des
   objets du jeu. Les anciennes scènes sans caméra restent compatibles.
+
+En mode édition, chaque scène conserve son propre cadrage libre (position et
+zoom) pendant la session ; changer de scène restaure son dernier cadrage.
 
 Les opérations de glisser affichent leur aperçu avant de valider les données au
 relâchement de la souris.
@@ -293,6 +311,11 @@ en lecture seule (`GameObject`). L'empreinte se règle dans l'inspecteur. Les
 formes libres, le filtrage par type/couche et les événements de collision
 physique restent à développer.
 
+En Lecture, un clic gauche sur un objet appelle le hook optionnel
+`_on_click(game)` de son script. Le hit-test utilise les limites d'affichage de
+l'objet dans le viewport ; le hook n'est pas appelé en mode édition et ne se
+répète pas pendant le maintien du bouton.
+
 Le contenu de la case « Ajuster » est sérialisé sur l'objet. Les anciens objets
 qui n'ont pas ce champ sont chargés avec la valeur par défaut `true`.
 
@@ -317,6 +340,26 @@ Chaque callback reçoit aussi un instantané en lecture seule des objets de la
 scène. `game.get_object(uuid)` consulte un objet par ID et
 `game.find_object(name)` le cherche par nom exact ; les champs de cet instantané
 incluent sa position. Le monde et les scripts d'objet disposent de ces méthodes.
+Un script d'objet peut obtenir son propre instantané par `game.get_self_object()` ;
+`game.require_object(name)` fournit une recherche exacte obligatoire, tandis que
+`game.find_object(name)` reste nullable.
+`game.get_scene(name)` donne aussi un instantané en lecture seule d'une scène
+quelconque du projet, chargée ou non, avec ses objets et leurs positions. Cette
+consultation ne change pas la scène active.
+`game.get_distance(object1, object2)` calcule la distance euclidienne en X/Y,
+exprimée en unités de tuile et indépendante de l'élévation Z.
+
+Le HUD de Lecture est séparé des objets du monde. `game.ui.set_text` crée ou
+remplace un texte identifié, tandis que `update_text`, `update_position`,
+`update_anchor`, `update_font_size` et `update_color` émettent des commandes
+partielles qui préservent les autres champs. Les mises à jour d'identifiants
+inexistants sont ignorées. `game.ui.remove_text` retire un texte. L'éditeur
+maintient ces textes pendant la session et les dessine par-dessus le viewport
+avec l'un des neuf ancrages d'écran. Les positions sont exprimées en points
+d'interface, indépendants du zoom de la scène. Le HUD est éphémère, partagé par
+les scripts, visible en pause et vidé au Stop ; il n'est pas sérialisé.
+La barre de statut permet de masquer le sélecteur caméra/vue libre et le
+compteur FPS pendant la Lecture.
 
 Les signatures, méthodes disponibles, types de valeurs et exemples sont
 détaillés dans [`PYTHON_API.md`](PYTHON_API.md).
@@ -353,10 +396,10 @@ presse-papiers. Le raccourci est associé au panneau Log ; ailleurs, `Ctrl+C`
 conserve son comportement habituel.
 
 L'API permet entre autres de créer, déplacer ou supprimer des objets, de changer
-des propriétés, de lire l'état clavier et d'écrire dans les logs. Les scripts
-restent du code de confiance : PyO3 ne constitue pas une sandbox. La lecture
-d'état global, les entrées souris, les autres événements de jeu, le débogage
-interactif et le pipeline de déploiement restent à développer.
+des propriétés, de lire l'état clavier, de partager des valeurs globales pendant
+la session et d'écrire dans les logs. Les scripts restent du code de confiance :
+PyO3 ne constitue pas une sandbox. Les entrées souris, les autres événements de
+jeu, le débogage interactif et le pipeline de déploiement restent à développer.
 
 Le binaire `player` partage la boucle graphique et les systèmes de scène avec
 l'éditeur, mais charge directement un projet en Lecture et n'affiche pas les

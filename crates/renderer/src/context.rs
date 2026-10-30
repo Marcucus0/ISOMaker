@@ -69,6 +69,11 @@ impl RenderContext {
             surface_format
         );
 
-        Ok(Self { instance, device, queue, surface_format })
+        Ok(Self {
+            instance,
+            device,
+            queue,
+            surface_format,
+        })
     }
 }

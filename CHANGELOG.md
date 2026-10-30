@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.0 — 2026-10-31
+
+### Ajouté
+
+- Interface HUD pilotable en Python : création de textes, neuf points d'ancrage,
+  et mises à jour séparées du contenu, de la position, de la taille et de la couleur.
+- Callback `_on_click(game)` pour exécuter le script d'un objet cliqué en Lecture.
+- Variables globales partagées entre les scripts du monde et des objets pendant
+  la session, réinitialisées à l'arrêt.
+- Accès Python en lecture seule aux scènes et objets d'autres scènes, ainsi que
+  recherche obligatoire d'objet et mesure de distance.
+- Copie/collage de zones de tuiles sans les objets présents, et placement des
+  nouveaux objets sur la tuile sélectionnée ou survolée.
+- Cadrage de l'éditeur indépendant par scène, noms uniques par scène et commandes
+  de viewport pour afficher/masquer FPS et sélecteur de caméra en Lecture.
+- Snippets VS Code pour l'interface HUD et le callback de clic d'objet.
+
+### Modifié
+
+- Mise à jour de la documentation d'architecture et de l'API Python pour les
+  nouvelles fonctions de script et le comportement du viewport.
+
+### Vérification
+
+- `cargo check --workspace` : réussi sans erreur ni avertissement.
+- `cargo build --release -p editor` : réussi dans `target/release-check`.
+- `cargo test --workspace` : 29 tests réussis dans `target/release-check`.
+- `python -m unittest discover -s python/tests -v` : 5 tests réussis.
+- Paramètres, extensions recommandées et snippets VS Code valides en JSON.
+
 ## 0.3.0 — 2026-10-30
 
 ### Ajouté

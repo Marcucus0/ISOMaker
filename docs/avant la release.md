@@ -1,8 +1,10 @@
-1. tu check si la documentation est a jour (architecture, progression, python_api)
-2. tu check si tout le code dans le fichier .vscode (pour l'extention) est bon
-3. tu compiles et vérifies les erreurs/avertissements avec :
+0. tu vas check tout le code voir si du code qu'on utilise pas est toujours là
+1. tu compiles et vérifies les erreurs/avertissements avec :
    - `cargo check --workspace`
    - `cargo build --release -p editor`
+2. tu check si la documentation est a jour (architecture, progression, python_api)
+3. tu check si tout le code dans le fichier .vscode (pour l'extention) est bon et cohérent / a jour
+
 4. tu fais les tests Rust et Python :
    - `cargo test --workspace` pour les tests Rust ;
    - `python -m unittest discover -s python/tests -v` pour les tests Python.
@@ -42,5 +44,17 @@ Vérification effectuée pour la release 0.3.0 le 30 octobre 2026 :
 - Paramètres VS Code et snippets contrôlés ; les deux fichiers JSON sont valides.
 - `cargo check --workspace` : réussi sans avertissement.
 - `cargo build --release -p editor` : réussi.
+- `cargo test --workspace` dans `target/release-check` : 29 tests réussis.
+- `python -m unittest discover -s python/tests -v` : 5 tests réussis.
+
+Vérification effectuée pour la release 0.4.0 le 31 octobre 2026 :
+
+- Documentation contrôlée : `ARCHITECTURE.md`, `PROGRESSION.md`, `PYTHON_API.md`,
+  `PROMPT BASE.md` et README actualisés avec le HUD, les clics sur objets, les
+  variables globales de session et les accès inter-scènes.
+- Paramètres et extensions recommandées VS Code contrôlés ; `settings.json`,
+  `extensions.json` et `engine-api.code-snippets` valides en JSON.
+- `cargo check --workspace` : réussi sans avertissement.
+- `cargo build --release -p editor` dans `target/release-check` : réussi.
 - `cargo test --workspace` dans `target/release-check` : 29 tests réussis.
 - `python -m unittest discover -s python/tests -v` : 5 tests réussis.

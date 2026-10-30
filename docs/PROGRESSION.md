@@ -68,6 +68,12 @@ complet prêt au déploiement.
   de l'ouverture d'un autre projet.
 - **Historique** : `Ctrl+Z` annule et `Ctrl+Y` rétablit la dernière modification
   de la scène.
+- **Copier/coller** : `Ctrl+C` sur une zone sélectionnée copie les tuiles de
+  cette zone, y compris les vides, sans les objets qui s'y trouvent ; `Ctrl+V`
+  colle la zone à partir de la tuile survolée.
+- **Placement des objets** : un nouvel objet générique, type personnalisé ou
+  caméra apparaît sur la tuile sélectionnée, sinon sur celle survolée (ou la
+  dernière survolée si la commande vient d'un panneau latéral).
 - **Confirmation de suppression** : une boîte de dialogue confirme la suppression
   d'objets depuis la scène ou la liste d'objets. `Entrée` confirme et `Échap`
   annule.
@@ -79,16 +85,29 @@ complet prêt au déploiement.
   les dix derniers projets ouverts ou enregistrés. La liste est persistante.
 - **Raccourcis de simulation** : `F9` lance/reprend, `F10` arrête et `F11` met
   en pause.
+- **Raccourcis des outils** : `F` active Peindre, `G` Gomme et `A` Remplir
+  lorsque l'éditeur est actif et qu'aucun champ de texte n'a le focus.
+- **Interface HUD** : les scripts peuvent créer ou actualiser du texte avec
+  `game.ui.set_text`, modifier séparément son contenu, sa position, son ancrage,
+  sa taille ou sa couleur, puis le retirer par identifiant avec
+  `game.ui.remove_text`. Neuf points d'ancrage positionnent les textes dans le
+  viewport en points d'interface. Le HUD persiste pendant la pause et est vidé
+  au Stop ; il n'est pas sauvegardé dans le projet et n'est pas interactif.
+- **Contrôles du viewport en Lecture** : la barre de statut permet d'afficher
+  ou masquer le sélecteur caméra/vue libre et le compteur FPS.
 - **Caméras** : ajout de caméras de scène avec position, zoom et choix d'une
   caméra principale. Leur inspecteur propose un réglage pour activer le lissage
   et un curseur de vitesse. En Lecture et Pause, le viewport peut suivre une
   caméra choisie avec interpolation fluide de position et de zoom, ou afficher
   la vue libre de l'éditeur. La molette du viewport est désactivée en Lecture
-  et Pause.
+  et Pause. En édition, le cadrage libre (position et zoom) est mémorisé par
+  scène pendant la session et restauré lors du changement de scène.
 - **Paramètres de l'éditeur** : le menu **Fichier** ouvre les préférences
   globales sauvegardées dans le dossier de configuration utilisateur. La
   grille peut être masquée pendant Lecture et Pause, et sa couleur est
-  configurable.
+  configurable. Des cases définissent l'affichage initial des FPS, du sélecteur
+  de vue et des logs. Un projet peut être choisi pour s'ouvrir au prochain
+  démarrage de l'éditeur.
 - **Sélection d'objets** : sélection rectangulaire avec `Shift`, surlignage,
   déplacement temporaire avec aperçu et suppression. Le panneau Bâtiments et
   l'outil Construire ont été retirés au profit des types d'objets personnalisés.
@@ -121,6 +140,9 @@ complet prêt au déploiement.
   choisies dans la liste des scènes du projet et sont actualisées quand une
   scène est renommée ou supprimée. Types et valeurs sont sauvegardés dans
   `.isomaker` ; les données legacy de bâtiments restent lisibles.
+- **Noms d'objets** : les noms sont uniques par scène. Lors d'un ajout ou d'un
+  renommage qui ferait doublon, le moteur choisit automatiquement le premier
+  suffixe libre, comme `Coffre (1)`.
 - **Python** : runtime PyO3 et entrée **Monde → Script du monde**. Le script
   configuré est chargé à Lecture ; `_on_game_launch(game)` est appelé une fois
   et `_on_update(game, delta_time)` à chaque mise à jour. Le bouton **Créer un
@@ -132,10 +154,14 @@ complet prêt au déploiement.
   pressées ou relâchées pendant Lecture avec les constantes `game.keys`.
   Les scripts attachés aux objets peuvent aussi lire leurs coordonnées courantes
   et les champs de l'inspecteur, retrouver un autre objet avec
-  `game.get_object(uuid)` ou `game.find_object(nom)`, puis modifier les champs
+  `game.get_object(uuid)` ou `game.find_object(nom)`, mesurer la distance 2D
+  en tuiles avec `game.get_distance(objet1, objet2)`, puis modifier les champs
   éditables avec `set_self_property` ou `game.set_property`.
   Les scripts générés sont annotés pour l'autocomplétion VS Code/Pylance à l'aide
   du stub `python/engine_api/__init__.pyi`.
+  `game.set_global(key, value)` et `game.get_global(key)` partagent les valeurs
+  JSON entre le monde et les scripts d'objets pendant la lecture ; elles sont
+  réinitialisées au Stop et ne sont pas sauvegardées dans le projet.
   Lecture est bloquée si le monde n'a pas de script défini ou si son fichier
   ne peut pas être chargé ; la fenêtre Monde s'ouvre alors.
   Les logs identiques consécutifs sont regroupés pour limiter le coût des
@@ -162,12 +188,11 @@ complet prêt au déploiement.
 - Le placement par glisser-déposer et les scripts ou textures par défaut partagés
   par un type restent à ajouter si nécessaire.
 - La couleur de la grille est une préférence globale sauvegardée dans les
-  paramètres de l'éditeur. L'option d'affichage de la grille en Lecture/Pause
-  n'est pas persistée. Les dimensions de tuile existent dans les métadonnées de
+  paramètres de l'éditeur. Les dimensions de tuile existent dans les métadonnées de
   scène, sans UI dédiée.
 - L'export ne collecte pas encore les dépendances Python tierces utilisées par
   les scripts. Le ZIP doit être vérifié sur une installation Windows propre.
-- L'API Python expose les objets de scène sous forme d'instantanés en lecture seule, mais pas encore l'état global du monde, les entrées souris ni les événements génériques hors des zones. Le débogage interactif et les permissions de scripts tiers restent à concevoir.
+- L'API Python expose les scènes et objets du projet sous forme d'instantanés en lecture seule. Les entrées souris génériques et les événements hors des zones restent à développer. Le débogage interactif et les permissions de scripts tiers restent à concevoir.
 - Le format projet est en version 1. Les migrations entre versions restent à
   définir si le schéma évolue.
 

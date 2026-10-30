@@ -1,4 +1,30 @@
 {
+  "HUD text": {
+    "scope": "python",
+    "prefix": "ui_text",
+    "description": "Crée un texte dans le HUD du jeu",
+    "body": [
+      "game.ui.set_text(",
+      "    \"${1:score}\",",
+      "    \"${2:Score : 0}\",",
+      "    x=${3:24},",
+      "    y=${4:20},",
+      "    anchor=game.ui_anchor.${5|TOP_LEFT,TOP_CENTER,TOP_RIGHT,CENTER_LEFT,CENTER,CENTER_RIGHT,BOTTOM_LEFT,BOTTOM_CENTER,BOTTOM_RIGHT|},",
+      "    font_size=${6:24},",
+      ")"
+    ]
+  },
+  "Object click callback": {
+    "scope": "python",
+    "prefix": "_on_click",
+    "description": "Callback appelé quand le joueur clique sur l'objet en mode Lecture",
+    "body": [
+      "def _on_click(game: GameContext) -> None:",
+      "    \"\"\"Appelé quand le joueur clique sur cet objet en Lecture.\"\"\"",
+      "    ${1:pass}",
+      ""
+    ]
+  },
   "Zone entered callback": {
     "scope": "python",
     "prefix": "_on_area_entered",

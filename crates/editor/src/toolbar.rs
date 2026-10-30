@@ -19,12 +19,12 @@ pub enum EditorTool {
 impl EditorTool {
     pub fn label(&self) -> &'static str {
         match self {
-            EditorTool::Select    => "Sélection",
-            EditorTool::Move      => "Déplacer",
-            EditorTool::Rotate    => "Rotation",
+            EditorTool::Select => "Sélection",
+            EditorTool::Move => "Déplacer",
+            EditorTool::Rotate => "Rotation",
             EditorTool::TilePaint => "Peindre",
             EditorTool::TileErase => "Gomme",
-            EditorTool::TileFill  => "Remplir",
+            EditorTool::TileFill => "Remplir",
         }
     }
 }
@@ -50,12 +50,8 @@ impl Widget for ToolButton {
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         let visuals = ui.style().interact_selectable(&response, self.selected);
 
-        ui.painter().rect(
-            rect,
-            visuals.rounding,
-            visuals.bg_fill,
-            visuals.bg_stroke,
-        );
+        ui.painter()
+            .rect(rect, visuals.rounding, visuals.bg_fill, visuals.bg_stroke);
 
         let icon_rect = Rect::from_min_size(
             Pos2::new(rect.left() + padding.x, rect.center().y - icon_size * 0.5),
@@ -129,7 +125,12 @@ fn draw_tool_icon(painter: &egui::Painter, rect: Rect, tool: EditorTool, color: 
             line(point(0.31, 0.86), point(0.43, 0.74));
             line(point(0.43, 0.74), point(0.35, 0.66));
             painter.add(Shape::convex_polygon(
-                vec![point(0.62, 0.25), point(0.76, 0.39), point(0.84, 0.31), point(0.70, 0.17)],
+                vec![
+                    point(0.62, 0.25),
+                    point(0.76, 0.39),
+                    point(0.84, 0.31),
+                    point(0.70, 0.17),
+                ],
                 color,
                 Stroke::NONE,
             ));
@@ -142,11 +143,7 @@ fn draw_tool_icon(painter: &egui::Painter, rect: Rect, tool: EditorTool, color: 
                 point(0.83, 0.40),
                 point(0.42, 0.85),
             ];
-            painter.add(Shape::convex_polygon(
-                eraser,
-                Color32::TRANSPARENT,
-                stroke,
-            ));
+            painter.add(Shape::convex_polygon(eraser, Color32::TRANSPARENT, stroke));
             line(point(0.36, 0.42), point(0.62, 0.65));
             line(point(0.22, 0.88), point(0.80, 0.88));
         }
@@ -208,7 +205,9 @@ impl Default for Toolbar {
 }
 
 impl Toolbar {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Dessine la barre d'outils et retourne la commande éventuelle (Play/Pause/Stop).
     pub fn show(
@@ -240,42 +239,56 @@ impl Toolbar {
             // ── Fichier ──────────────────────────────────────────────────────
             ui.menu_button("Fichier", |ui| {
                 ui.add_enabled_ui(editor_enabled, |ui| {
-                if ui.button("Nouveau projet").clicked() {
-                    self.new_requested = true;
-                    ui.close_menu();
-                }
-                if ui.button("Ouvrir…").clicked() {
-                    self.open_requested = true;
-                    ui.close_menu();
-                }
-                ui.menu_button("Projets récents", |ui| {
-                    if recent_projects.is_empty() {
-                        ui.label("Aucun projet récent");
-                    } else {
-                        for path in recent_projects {
-                            let label = path.file_name().and_then(|name| name.to_str())
-                                .unwrap_or_else(|| path.to_str().unwrap_or("Projet"));
-                            if ui.button(label).on_hover_text(path.display().to_string()).clicked() {
-                                self.recent_project_requested = Some(path.clone());
-                                ui.close_menu();
+                    if ui.button("Nouveau projet").clicked() {
+                        self.new_requested = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("Ouvrir…").clicked() {
+                        self.open_requested = true;
+                        ui.close_menu();
+                    }
+                    ui.menu_button("Projets récents", |ui| {
+                        if recent_projects.is_empty() {
+                            ui.label("Aucun projet récent");
+                        } else {
+                            for path in recent_projects {
+                                let label = path
+                                    .file_name()
+                                    .and_then(|name| name.to_str())
+                                    .unwrap_or_else(|| path.to_str().unwrap_or("Projet"));
+                                if ui
+                                    .button(label)
+                                    .on_hover_text(path.display().to_string())
+                                    .clicked()
+                                {
+                                    self.recent_project_requested = Some(path.clone());
+                                    ui.close_menu();
+                                }
                             }
                         }
+                    });
+                    if ui.button("Enregistrer").clicked() {
+                        self.save_requested = true;
+                        ui.close_menu();
                     }
-                });
-                if ui.button("Enregistrer").clicked() {
-                    self.save_requested = true;
-                    ui.close_menu();
-                }
-                if ui.button("Enregistrer sous…").clicked() {
-                    self.save_as_requested = true;
-                    ui.close_menu();
-                }
-                if ui.add_enabled(!export_in_progress, egui::Button::new(
-                    if export_in_progress { "Export en cours…" } else { "Exporter le jeu…" },
-                )).clicked() {
-                    self.export_requested = true;
-                    ui.close_menu();
-                }
+                    if ui.button("Enregistrer sous…").clicked() {
+                        self.save_as_requested = true;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(
+                            !export_in_progress,
+                            egui::Button::new(if export_in_progress {
+                                "Export en cours…"
+                            } else {
+                                "Exporter le jeu…"
+                            }),
+                        )
+                        .clicked()
+                    {
+                        self.export_requested = true;
+                        ui.close_menu();
+                    }
                 });
                 ui.separator();
                 if ui.button("Paramètres de l'éditeur…").clicked() {
@@ -289,76 +302,104 @@ impl Toolbar {
                 }
             });
 
-            ui.add_enabled_ui(editor_enabled, |ui| ui.menu_button("Monde", |ui| {
-                if ui.button("Paramètres du monde…").clicked() {
-                    self.world_settings_requested = true;
-                    ui.close_menu();
-                }
-            }));
+            ui.add_enabled_ui(editor_enabled, |ui| {
+                ui.menu_button("Monde", |ui| {
+                    if ui.button("Paramètres du monde…").clicked() {
+                        self.world_settings_requested = true;
+                        ui.close_menu();
+                    }
+                })
+            });
 
             ui.separator();
 
             // ── Outils ───────────────────────────────────────────────────────
             ui.add_enabled_ui(editor_enabled, |ui| {
-            for tool in [
-                EditorTool::Select,
-                EditorTool::Move,
-                EditorTool::Rotate,
-                EditorTool::TilePaint,
-                EditorTool::TileErase,
-                EditorTool::TileFill,
-            ] {
-                let selected = self.active_tool == tool;
-                if ui.add(ToolButton { tool, selected }).clicked() {
-                    self.active_tool = tool;
+                for tool in [
+                    EditorTool::Select,
+                    EditorTool::Move,
+                    EditorTool::Rotate,
+                    EditorTool::TilePaint,
+                    EditorTool::TileErase,
+                    EditorTool::TileFill,
+                ] {
+                    let selected = self.active_tool == tool;
+                    if ui.add(ToolButton { tool, selected }).clicked() {
+                        self.active_tool = tool;
+                    }
                 }
-            }
             });
 
-            let active_scene_name = scene_names.get(active_scene).map(String::as_str).unwrap_or("Aucune");
+            let active_scene_name = scene_names
+                .get(active_scene)
+                .map(String::as_str)
+                .unwrap_or("Aucune");
             let scene_menu_label = format!("Scène : {active_scene_name}");
-            let longest_scene_label = scene_names.iter()
+            let longest_scene_label = scene_names
+                .iter()
                 .map(|name| format!("Scène : {name}"))
                 .max_by_key(|label| label.chars().count())
                 .unwrap_or_else(|| "Scène : Aucune".to_owned());
             let button_font = egui::TextStyle::Button.resolve(ui.style());
             let label_width = ui.fonts(|fonts| {
-                fonts.layout_no_wrap(longest_scene_label, button_font, Color32::WHITE).size().x
+                fonts
+                    .layout_no_wrap(longest_scene_label, button_font, Color32::WHITE)
+                    .size()
+                    .x
             });
             let scene_button_size = Vec2::new(label_width + 40.0, ui.spacing().interact_size.y);
-            ui.add_enabled_ui(editor_enabled, |ui| egui::menu::menu_custom_button(
-                ui,
-                egui::Button::new(scene_menu_label).min_size(scene_button_size),
-                |ui| {
-                for (index, name) in scene_names.iter().enumerate() {
-                    let response = ui.selectable_label(index == active_scene, name);
-                    if response.clicked() {
-                        self.scene_switch_requested = Some(index);
-                        ui.close_menu();
-                    }
-                    response.context_menu(|ui| {
-                        if ui.button("Renommer…").clicked() {
-                            self.scene_rename_requested = Some(index);
+            ui.add_enabled_ui(editor_enabled, |ui| {
+                egui::menu::menu_custom_button(
+                    ui,
+                    egui::Button::new(scene_menu_label).min_size(scene_button_size),
+                    |ui| {
+                        for (index, name) in scene_names.iter().enumerate() {
+                            let response = ui.selectable_label(index == active_scene, name);
+                            if response.clicked() {
+                                self.scene_switch_requested = Some(index);
+                                ui.close_menu();
+                            }
+                            response.context_menu(|ui| {
+                                if ui.button("Renommer…").clicked() {
+                                    self.scene_rename_requested = Some(index);
+                                    ui.close_menu();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        scene_names.len() > 1,
+                                        egui::Button::new("Supprimer"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.scene_delete_requested = Some(index);
+                                    ui.close_menu();
+                                }
+                            });
+                        }
+                        ui.separator();
+                        if ui.button("+ Nouvelle scène").clicked() {
+                            self.new_scene_requested = true;
                             ui.close_menu();
                         }
-                        if ui.add_enabled(scene_names.len() > 1, egui::Button::new("Supprimer" )).clicked() {
-                            self.scene_delete_requested = Some(index);
-                            ui.close_menu();
-                        }
-                    });
-                }
-                ui.separator();
-                if ui.button("+ Nouvelle scène").clicked() {
-                    self.new_scene_requested = true;
-                    ui.close_menu();
-                }
-            }));
+                    },
+                )
+            });
 
             ui.separator();
 
             // ── Annuler / Rétablir ────────────────────────────────────────────
-            if ui.add_enabled(editor_enabled, egui::Button::new("↩ Annuler")).clicked()   { self.undo_requested = true; }
-            if ui.add_enabled(editor_enabled, egui::Button::new("↪ Rétablir")).clicked()  { self.redo_requested = true; }
+            if ui
+                .add_enabled(editor_enabled, egui::Button::new("↩ Annuler"))
+                .clicked()
+            {
+                self.undo_requested = true;
+            }
+            if ui
+                .add_enabled(editor_enabled, egui::Button::new("↪ Rétablir"))
+                .clicked()
+            {
+                self.redo_requested = true;
+            }
 
             ui.separator();
 
@@ -380,10 +421,10 @@ impl Toolbar {
                 ui.separator();
 
                 // Bouton Stop
-                if ui.add_enabled(
-                    mode != EngineMode::Editor,
-                    egui::Button::new("⏹ Stop"),
-                ).clicked() {
+                if ui
+                    .add_enabled(mode != EngineMode::Editor, egui::Button::new("⏹ Stop"))
+                    .clicked()
+                {
                     game_loop.stop();
                 }
 
@@ -399,10 +440,10 @@ impl Toolbar {
                 }
 
                 // Bouton Play
-                if ui.add_enabled(
-                    mode != EngineMode::Playing,
-                    egui::Button::new("▶ Lecture"),
-                ).clicked() {
+                if ui
+                    .add_enabled(mode != EngineMode::Playing, egui::Button::new("▶ Lecture"))
+                    .clicked()
+                {
                     game_loop.play();
                 }
             });

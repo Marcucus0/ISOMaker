@@ -33,12 +33,14 @@ impl World {
     }
 
     pub fn active_scene(&self) -> &Scene {
-        self.scenes.get(self.active_scene_index)
+        self.scenes
+            .get(self.active_scene_index)
             .expect("World must contain a valid active scene")
     }
 
     pub fn active_scene_mut(&mut self) -> &mut Scene {
-        self.scenes.get_mut(self.active_scene_index)
+        self.scenes
+            .get_mut(self.active_scene_index)
             .expect("World must contain a valid active scene")
     }
 
@@ -109,8 +111,14 @@ impl Project {
 
     pub fn from_json(json: &str) -> anyhow::Result<Self> {
         let project: Self = serde_json::from_str(json)?;
-        anyhow::ensure!(project.format_version == 1, "Version de projet non prise en charge");
-        anyhow::ensure!(!project.world.scenes.is_empty(), "Le monde doit contenir au moins une scène");
+        anyhow::ensure!(
+            project.format_version == 1,
+            "Version de projet non prise en charge"
+        );
+        anyhow::ensure!(
+            !project.world.scenes.is_empty(),
+            "Le monde doit contenir au moins une scène"
+        );
         anyhow::ensure!(
             project.world.active_scene_index < project.world.scenes.len(),
             "L'indice de la scène active est invalide"
@@ -122,14 +130,28 @@ impl Project {
         let mut tile_ids = std::collections::HashSet::new();
         for tile in &project.tile_definitions {
             anyhow::ensure!(tile.id != 0, "L'identifiant 0 est réservé à la tuile vide");
-            anyhow::ensure!(tile_ids.insert(tile.id), "Identifiant de tuile dupliqué : {}", tile.id);
+            anyhow::ensure!(
+                tile_ids.insert(tile.id),
+                "Identifiant de tuile dupliqué : {}",
+                tile.id
+            );
         }
         let mut type_ids = std::collections::HashSet::new();
         let mut type_names = std::collections::HashSet::new();
         for object_type in &project.object_types {
-            anyhow::ensure!(type_ids.insert(object_type.id), "Identifiant de type d'objet dupliqué");
-            anyhow::ensure!(!object_type.name.trim().is_empty(), "Un type d'objet ne peut pas avoir un nom vide");
-            anyhow::ensure!(type_names.insert(object_type.name.to_lowercase()), "Nom de type d'objet dupliqué : {}", object_type.name);
+            anyhow::ensure!(
+                type_ids.insert(object_type.id),
+                "Identifiant de type d'objet dupliqué"
+            );
+            anyhow::ensure!(
+                !object_type.name.trim().is_empty(),
+                "Un type d'objet ne peut pas avoir un nom vide"
+            );
+            anyhow::ensure!(
+                type_names.insert(object_type.name.to_lowercase()),
+                "Nom de type d'objet dupliqué : {}",
+                object_type.name
+            );
             let mut property_keys = std::collections::HashSet::new();
             for property in &object_type.properties {
                 anyhow::ensure!(
@@ -138,15 +160,25 @@ impl Project {
                     property.key
                 );
                 anyhow::ensure!(property.key != "texture", "La clé `texture` est réservée");
-                anyhow::ensure!(property_keys.insert(property.key.as_str()), "Clé de propriété dupliquée : {}", property.key);
+                anyhow::ensure!(
+                    property_keys.insert(property.key.as_str()),
+                    "Clé de propriété dupliquée : {}",
+                    property.key
+                );
                 let value_matches_kind = matches!(
                     (&property.kind, &property.default_value),
-                    (CustomPropertyKind::Text | CustomPropertyKind::Scene, PropValue::Str(_))
-                        | (CustomPropertyKind::Integer, PropValue::Int(_))
+                    (
+                        CustomPropertyKind::Text | CustomPropertyKind::Scene,
+                        PropValue::Str(_)
+                    ) | (CustomPropertyKind::Integer, PropValue::Int(_))
                         | (CustomPropertyKind::Float, PropValue::Float(_))
                         | (CustomPropertyKind::Boolean, PropValue::Bool(_))
                 );
-                anyhow::ensure!(value_matches_kind, "Valeur initiale incompatible avec le type de propriété `{}`", property.key);
+                anyhow::ensure!(
+                    value_matches_kind,
+                    "Valeur initiale incompatible avec le type de propriété `{}`",
+                    property.key
+                );
             }
         }
         Ok(project)
@@ -155,7 +187,9 @@ impl Project {
 
 fn is_valid_custom_property_key(key: &str) -> bool {
     let mut chars = key.chars();
-    chars.next().is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+    chars
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
         && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
@@ -169,11 +203,8 @@ mod tests {
         let mut project = Project::new("Release fixture");
         project.world.script = Some("project/scripts/world.py".to_owned());
         let active_index = project.world.add_scene("Gameplay");
-        let mut camera = crate::object::SceneObject::new(
-            "Main camera",
-            ObjectType::Camera,
-            TilePos::new(4, 6),
-        );
+        let mut camera =
+            crate::object::SceneObject::new("Main camera", ObjectType::Camera, TilePos::new(4, 6));
         camera.camera_zoom = 1.75;
         camera.camera_interpolation = false;
         camera.camera_interpolation_speed = 13.5;
@@ -182,7 +213,10 @@ mod tests {
         let saved = project.to_json().unwrap();
         let loaded = Project::from_json(&saved).unwrap();
         assert_eq!(loaded.world.name, "Monde principal");
-        assert_eq!(loaded.world.script.as_deref(), Some("project/scripts/world.py"));
+        assert_eq!(
+            loaded.world.script.as_deref(),
+            Some("project/scripts/world.py")
+        );
         assert_eq!(loaded.world.scenes.len(), 2);
         assert_eq!(loaded.world.active_scene_index, active_index);
         let camera = loaded.world.active_scene().objects.values().next().unwrap();

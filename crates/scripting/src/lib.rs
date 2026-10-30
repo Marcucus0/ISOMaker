@@ -11,9 +11,9 @@
 //! - Les erreurs Python sont capturées proprement.
 //! - Le thread de rendu n'est jamais bloqué par Python.
 
+pub mod api;
 pub mod command;
 pub mod runtime;
-pub mod api;
 
 pub use command::GameCommand;
-pub use runtime::{ScriptRuntime, ScriptError};
+pub use runtime::{ScriptError, ScriptRuntime};

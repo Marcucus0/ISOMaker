@@ -1,7 +1,7 @@
 //! Texture GPU — wrapping wgpu::Texture + view + sampler.
 
-use wgpu::{Device, Queue, Texture, TextureView, Sampler, Extent3d};
 use image::DynamicImage;
+use wgpu::{Device, Extent3d, Queue, Sampler, Texture, TextureView};
 
 /// Une texture chargée sur le GPU avec sa vue et son sampler.
 pub struct GpuTexture {
@@ -18,7 +18,11 @@ impl GpuTexture {
         let rgba = image.to_rgba8();
         let (width, height) = rgba.dimensions();
 
-        let size = Extent3d { width, height, depth_or_array_layers: 1 };
+        let size = Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size,
@@ -55,6 +59,12 @@ impl GpuTexture {
             ..Default::default()
         });
 
-        Self { texture, view, sampler, width, height }
+        Self {
+            texture,
+            view,
+            sampler,
+            width,
+            height,
+        }
     }
 }

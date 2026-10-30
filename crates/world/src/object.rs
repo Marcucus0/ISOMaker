@@ -1,9 +1,9 @@
 //! Objets et instances de scène.
 
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use std::collections::HashMap;
 use crate::{coords::TilePos, layer::Layer};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use uuid::Uuid;
 
 /// Identifiant unique et stable d'un objet dans la scène.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -74,9 +74,9 @@ impl Rotation4 {
     pub fn next(self) -> Self {
         match self {
             Rotation4::North => Rotation4::East,
-            Rotation4::East  => Rotation4::South,
+            Rotation4::East => Rotation4::South,
             Rotation4::South => Rotation4::West,
-            Rotation4::West  => Rotation4::North,
+            Rotation4::West => Rotation4::North,
         }
     }
 }
@@ -90,7 +90,10 @@ pub struct TileSize {
 
 impl Default for TileSize {
     fn default() -> Self {
-        Self { width: 1, height: 1 }
+        Self {
+            width: 1,
+            height: 1,
+        }
     }
 }
 
@@ -170,22 +173,43 @@ pub struct CustomObjectTypeDefinition {
 
 impl CustomObjectTypeDefinition {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { id: Uuid::new_v4(), name: name.into(), properties: Vec::new(), defaults: ObjectTypeDefaults::default() }
+        Self {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            properties: Vec::new(),
+            defaults: ObjectTypeDefaults::default(),
+        }
     }
 }
 
 impl PropValue {
     pub fn as_str(&self) -> Option<&str> {
-        if let PropValue::Str(s) = self { Some(s) } else { None }
+        if let PropValue::Str(s) = self {
+            Some(s)
+        } else {
+            None
+        }
     }
     pub fn as_int(&self) -> Option<i64> {
-        if let PropValue::Int(i) = self { Some(*i) } else { None }
+        if let PropValue::Int(i) = self {
+            Some(*i)
+        } else {
+            None
+        }
     }
     pub fn as_float(&self) -> Option<f64> {
-        if let PropValue::Float(f) = self { Some(*f) } else { None }
+        if let PropValue::Float(f) = self {
+            Some(*f)
+        } else {
+            None
+        }
     }
     pub fn as_bool(&self) -> Option<bool> {
-        if let PropValue::Bool(b) = self { Some(*b) } else { None }
+        if let PropValue::Bool(b) = self {
+            Some(*b)
+        } else {
+            None
+        }
     }
 }
 
@@ -252,10 +276,7 @@ impl SceneObject {
             asset_path: None,
             fit_texture_to_diamond: true,
             rotation: Rotation4::default(),
-            properties: HashMap::from([(
-                "texture".to_owned(),
-                PropValue::Str(String::new()),
-            )]),
+            properties: HashMap::from([("texture".to_owned(), PropValue::Str(String::new()))]),
             script: None,
             camera_zoom: 1.0,
             camera_interpolation: true,
