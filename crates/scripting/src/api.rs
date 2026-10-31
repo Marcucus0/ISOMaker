@@ -302,7 +302,7 @@ pub struct PyGameUI {
 #[pymethods]
 impl PyGameUI {
     /// Crée ou met à jour un texte identifié dans le HUD.
-    #[pyo3(signature = (id, text, x=0.0, y=0.0, anchor=None, font_size=24.0, color=None))]
+    #[pyo3(signature = (id, text, x=0.0, y=0.0, anchor=None, font_size=24.0, color=None, visible=true))]
     fn set_text(
         &self,
         id: &str,
@@ -312,6 +312,7 @@ impl PyGameUI {
         anchor: Option<PyRef<'_, PyUIAnchor>>,
         font_size: f32,
         color: Option<(u8, u8, u8, u8)>,
+        visible: bool,
     ) -> PyResult<()> {
         if id.is_empty() {
             return Err(pyo3::exceptions::PyValueError::new_err("L'identifiant du texte HUD ne peut pas être vide."));
@@ -331,6 +332,7 @@ impl PyGameUI {
                 anchor,
                 font_size: font_size.clamp(6.0, 128.0),
                 color: [color.0, color.1, color.2, color.3],
+                visible,
             }));
         Ok(())
     }
@@ -378,6 +380,28 @@ impl PyGameUI {
         self.queue.lock()
             .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
             .push(GameCommand::UpdateHudColor { id: id.to_owned(), color: [color.0, color.1, color.2, color.3] });
+        Ok(())
+    }
+
+    /// Fait diminuer progressivement l'opacité d'un texte, puis le supprime.
+    fn fade_out(&self, id: &str, duration: f32) -> PyResult<()> {
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err(pyo3::exceptions::PyValueError::new_err("La durée du fondu doit être un nombre positif."));
+        }
+        self.queue.lock()
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
+            .push(GameCommand::FadeOutHudText { id: id.to_owned(), duration });
+        Ok(())
+    }
+
+    /// Fait apparaître progressivement un texte HUD existant.
+    fn fade_in(&self, id: &str, duration: f32) -> PyResult<()> {
+        if !duration.is_finite() || duration <= 0.0 {
+            return Err(pyo3::exceptions::PyValueError::new_err("La durée du fondu doit être un nombre positif."));
+        }
+        self.queue.lock()
+            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
+            .push(GameCommand::FadeInHudText { id: id.to_owned(), duration });
         Ok(())
     }
 

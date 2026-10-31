@@ -173,9 +173,10 @@ survolée corresponde à sa surface affichée.
 réduit la densité de la grille. Les lignes restent ancrées aux coordonnées du
 monde afin d'éviter qu'elles glissent par rapport aux tuiles pendant le zoom.
 L'affichage de la grille et ses couleurs sont des options de vue de l'éditeur ;
-elles ne sont pas enregistrées dans le projet. La couleur est sauvegardée dans
-les préférences globales de l'éditeur (`%APPDATA%/MoteurDeJeu/editor_settings.json`).
-L'option qui masque la grille ne s'applique qu'en Lecture et en Pause. Les
+elles ne sont pas enregistrées dans le projet. La visibilité initiale de la
+grille en mode édition, sa couleur et les autres préférences de l'éditeur sont
+sauvegardées dans `%APPDATA%/MoteurDeJeu/editor_settings.json`. L'option qui
+masque la grille ne s'applique qu'en Lecture et en Pause. Les
 dimensions de tuile sont stockées par scène, mais ne disposent pas encore d'un
 contrôle dédié dans l'UI.
 
@@ -358,6 +359,9 @@ maintient ces textes pendant la session et les dessine par-dessus le viewport
 avec l'un des neuf ancrages d'écran. Les positions sont exprimées en points
 d'interface, indépendants du zoom de la scène. Le HUD est éphémère, partagé par
 les scripts, visible en pause et vidé au Stop ; il n'est pas sérialisé.
+`set_text(..., visible=False)` peut créer un texte caché. `game.ui.fade_in` et
+`game.ui.fade_out` animent son opacité ; le fondu sortant supprime le texte à
+la fin.
 La barre de statut permet de masquer le sélecteur caméra/vue libre et le
 compteur FPS pendant la Lecture.
 

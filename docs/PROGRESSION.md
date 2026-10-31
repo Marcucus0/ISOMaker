@@ -190,6 +190,13 @@ complet prêt au déploiement.
 - La couleur de la grille est une préférence globale sauvegardée dans les
   paramètres de l'éditeur. Les dimensions de tuile existent dans les métadonnées de
   scène, sans UI dédiée.
+- La visibilité par défaut de la grille en mode édition est configurable et
+  sauvegardée dans les préférences globales de l'éditeur.
+- Le HUD Python peut faire disparaître un texte avec `game.ui.fade_out(id,
+  durée)` ; le moteur réduit son opacité puis le retire automatiquement.
+- Le HUD Python peut aussi faire apparaître un texte existant avec
+  `game.ui.fade_in(id, durée)` ; `set_text(..., visible=False)` le crée caché
+  avant ce fondu.
 - L'export ne collecte pas encore les dépendances Python tierces utilisées par
   les scripts. Le ZIP doit être vérifié sur une installation Windows propre.
 - L'API Python expose les scènes et objets du projet sous forme d'instantanés en lecture seule. Les entrées souris génériques et les événements hors des zones restent à développer. Le débogage interactif et les permissions de scripts tiers restent à concevoir.

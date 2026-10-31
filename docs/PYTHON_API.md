@@ -154,14 +154,20 @@ if personnage is not None and coffre is not None:
 
 ### Texte d'interface (HUD)
 
-`game.ui.set_text(id, text, ...)` crée ou remplace un texte affiché au-dessus
-de la scène en Lecture. Les méthodes `update_text`, `update_position`,
+`game.ui.set_text(id, text, ..., visible=True)` crée ou remplace un texte affiché au-dessus
+de la scène en Lecture. `visible=False` le crée sans l'afficher ; `fade_in` le
+rend visible avec un fondu. Les méthodes `update_text`, `update_position`,
 `update_anchor`, `update_font_size` et `update_color` modifient chacune un seul
 paramètre d'un texte existant, sans changer les autres. Un identifiant absent
 est ignoré ; utilise `set_text` pour créer l'élément. `game.ui.remove_text(id)`
 le retire. Les identifiants
 sont globaux au HUD et doivent être uniques. Le texte n'est pas affecté par la
 caméra et reste ancré au viewport quand sa taille change.
+`game.ui.fade_out(id, duration)` réduit progressivement son opacité, puis le
+supprime à la fin de la durée indiquée en secondes.
+`game.ui.fade_in(id,
+duration)` le fait apparaître depuis la transparence jusqu'à son opacité actuelle,
+sans le supprimer.
 
 ```python
 def _on_game_launch(game: GameContext) -> None:
@@ -179,6 +185,7 @@ def _on_game_launch(game: GameContext) -> None:
 def _on_click(game: GameContext) -> None:
     game.ui.set_text("message", "Coffre ouvert !", x=-24, y=-24,
                      anchor=game.ui_anchor.BOTTOM_RIGHT)
+    game.ui.fade_in("message", 0.4)  # Apparaît en 0,4 seconde
 
 
 def actualiser_score(game: GameContext, score: int) -> None:

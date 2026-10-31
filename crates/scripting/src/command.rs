@@ -29,6 +29,7 @@ pub struct HudText {
     pub anchor: HudAnchor,
     pub font_size: f32,
     pub color: [u8; 4],
+    pub visible: bool,
 }
 
 /// Une commande émise par un script Python.
@@ -48,6 +49,10 @@ pub enum GameCommand {
     UpdateHudFontSize { id: String, font_size: f32 },
     /// Met à jour la couleur d'un texte HUD existant.
     UpdateHudColor { id: String, color: [u8; 4] },
+    /// Fait disparaître progressivement un texte HUD, puis le supprime.
+    FadeOutHudText { id: String, duration: f32 },
+    /// Fait apparaître progressivement un texte HUD.
+    FadeInHudText { id: String, duration: f32 },
     /// Supprime un texte du HUD par son identifiant.
     RemoveHudText { id: String },
     /// Crée un objet à la position donnée.

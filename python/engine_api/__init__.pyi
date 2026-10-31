@@ -146,8 +146,9 @@ class GameUI:
         anchor: UIAnchor | None = None,
         font_size: float = 24.0,
         color: tuple[int, int, int, int] | None = None,
+        visible: bool = True,
     ) -> None:
-        """Crée ou met à jour un texte HUD (couleur RGBA, blanc par défaut)."""
+        """Crée ou met à jour un texte HUD, visible par défaut."""
         ...
 
     def update_text(self, id: str, text: str) -> None: ...
@@ -155,6 +156,12 @@ class GameUI:
     def update_anchor(self, id: str, anchor: UIAnchor) -> None: ...
     def update_font_size(self, id: str, font_size: float) -> None: ...
     def update_color(self, id: str, color: tuple[int, int, int, int]) -> None: ...
+    def fade_out(self, id: str, duration: float) -> None:
+        """Fait disparaître le texte progressivement puis le supprime."""
+        ...
+    def fade_in(self, id: str, duration: float) -> None:
+        """Fait apparaître progressivement un texte existant."""
+        ...
 
     def remove_text(self, id: str) -> None:
         """Supprime un texte HUD."""

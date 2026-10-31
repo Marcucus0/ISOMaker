@@ -875,6 +875,9 @@ impl SceneView {
         if runtime_view {
             let hud_painter = painter.with_clip_rect(rect);
             for hud in hud_texts {
+                if !hud.visible {
+                    continue;
+                }
                 let anchor_pos = match hud.anchor {
                     HudAnchor::TopLeft => (egui::pos2(rect.left() + hud.x, rect.top() + hud.y), egui::Align2::LEFT_TOP),
                     HudAnchor::TopCenter => (egui::pos2(rect.center().x + hud.x, rect.top() + hud.y), egui::Align2::CENTER_TOP),

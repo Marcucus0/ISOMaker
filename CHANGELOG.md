@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0 — 2026-10-31
+
+### Ajouté
+
+- Fondu entrant et sortant des textes HUD avec `game.ui.fade_in` et
+  `game.ui.fade_out`, ainsi que l'option `visible` dans `game.ui.set_text`.
+- Préférence pour afficher la grille par défaut en mode édition, sauvegardée
+  dans les paramètres de l'éditeur.
+
+### Vérification
+
+- `cargo check --workspace` : réussi sans avertissement.
+- `cargo build --release -p editor` dans `target/release-check` : réussi.
+- `cargo test --workspace` dans `target/release-check` : 29 tests réussis.
+- `python -m unittest discover -s python/tests -v` : 5 tests réussis.
+- Fichiers JSON VS Code valides et stub Python vérifié.
+
 ## 0.4.0 — 2026-10-31
 
 ### Ajouté

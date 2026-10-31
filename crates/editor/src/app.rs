@@ -47,12 +47,21 @@ pub struct EditorState {
     /// Paires zone/objet qui se chevauchaient lors de la dernière frame.
     area_overlaps: HashSet<(ObjectId, ObjectId)>,
     hud_texts: HashMap<String, scripting::command::HudText>,
+    hud_fades: HashMap<String, HudFade>,
     /// Messages de log accumulés.
     pub log_messages: VecDeque<LogEntry>,
     /// Historique des états de scène pour annuler/rétablir les éditions.
     undo_history: Vec<String>,
     redo_history: Vec<String>,
     next_log_id: u64,
+}
+
+struct HudFade {
+    elapsed: f32,
+    duration: f32,
+    start_alpha: u8,
+    target_alpha: u8,
+    remove_on_complete: bool,
 }
 
 #[derive(Clone)]
@@ -84,6 +93,7 @@ impl EditorState {
             scene_stack: Vec::new(),
             area_overlaps: HashSet::new(),
             hud_texts: HashMap::new(),
+            hud_fades: HashMap::new(),
             log_messages: VecDeque::new(),
             undo_history: Vec::new(),
             redo_history: Vec::new(),
@@ -235,6 +245,7 @@ impl EditorState {
         self.area_overlaps.clear();
         self.scene_stack.clear();
         self.hud_texts.clear();
+        self.hud_fades.clear();
         if !has_active_session {
             return;
         }
@@ -260,6 +271,7 @@ impl EditorState {
         if !self.game_loop.is_simulating() {
             return;
         }
+        self.update_hud_fades(delta_time);
         self.refresh_script_scenes();
         if self.script_runtime.has_legacy_update() {
             match self.script_runtime.call_update(delta_time) {
@@ -311,6 +323,28 @@ impl EditorState {
             }
         }
         self.update_area_triggers(delta_time);
+    }
+
+    fn update_hud_fades(&mut self, delta_time: f32) {
+        let dt = delta_time.max(0.0);
+        let mut completed = Vec::new();
+        for (id, fade) in &mut self.hud_fades {
+            fade.elapsed = (fade.elapsed + dt).min(fade.duration);
+            if let Some(text) = self.hud_texts.get_mut(id) {
+                let progress = fade.elapsed / fade.duration;
+                let alpha = f32::from(fade.start_alpha)
+                    + (f32::from(fade.target_alpha) - f32::from(fade.start_alpha)) * progress;
+                text.color[3] = alpha.round() as u8;
+            }
+            if fade.elapsed >= fade.duration {
+                completed.push(id.clone());
+            }
+        }
+        for id in completed {
+            if self.hud_fades.remove(&id).is_some_and(|fade| fade.remove_on_complete) {
+                self.hud_texts.remove(&id);
+            }
+        }
     }
 
     /// Exécute le callback Python de l'objet cliqué pendant la lecture.
@@ -409,6 +443,7 @@ impl EditorState {
         for cmd in cmds {
             match cmd {
                 GameCommand::SetHudText(text) => {
+                    self.hud_fades.remove(&text.id);
                     self.hud_texts.insert(text.id.clone(), text);
                 }
                 GameCommand::UpdateHudText { id, text } => {
@@ -424,9 +459,37 @@ impl EditorState {
                     if let Some(existing) = self.hud_texts.get_mut(&id) { existing.font_size = font_size; }
                 }
                 GameCommand::UpdateHudColor { id, color } => {
+                    self.hud_fades.remove(&id);
                     if let Some(existing) = self.hud_texts.get_mut(&id) { existing.color = color; }
                 }
+                GameCommand::FadeOutHudText { id, duration } => {
+                    if let Some(existing) = self.hud_texts.get(&id) {
+                        let initial_alpha = existing.color[3];
+                        self.hud_fades.insert(id, HudFade {
+                            elapsed: 0.0,
+                            duration,
+                            start_alpha: initial_alpha,
+                            target_alpha: 0,
+                            remove_on_complete: true,
+                        });
+                    }
+                }
+                GameCommand::FadeInHudText { id, duration } => {
+                    if let Some(existing) = self.hud_texts.get_mut(&id) {
+                        let target_alpha = existing.color[3];
+                        existing.color[3] = 0;
+                        existing.visible = true;
+                        self.hud_fades.insert(id, HudFade {
+                            elapsed: 0.0,
+                            duration,
+                            start_alpha: 0,
+                            target_alpha,
+                            remove_on_complete: false,
+                        });
+                    }
+                }
                 GameCommand::RemoveHudText { id } => {
+                    self.hud_fades.remove(&id);
                     self.hud_texts.remove(&id);
                 }
                 GameCommand::Spawn {
@@ -1111,6 +1174,7 @@ pub struct EditorApp {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct EditorSettings {
+    show_grid_by_default: bool,
     hide_grid_during_play: bool,
     confirm_before_exit: bool,
     show_fps_by_default: bool,
@@ -1126,6 +1190,7 @@ struct EditorSettings {
 impl Default for EditorSettings {
     fn default() -> Self {
         Self {
+            show_grid_by_default: true,
             hide_grid_during_play: false,
             confirm_before_exit: true,
             show_fps_by_default: true,
@@ -1150,6 +1215,7 @@ impl EditorApp {
         let state = EditorState::new();
         let mut scene_view = SceneView::new();
         scene_view.activate_scene_view(&state.active_scene().meta.name);
+        scene_view.options.show_grid = editor_settings.show_grid_by_default;
         scene_view.options.grid_color = egui::Color32::from_rgba_unmultiplied(
             editor_settings.grid_color[0],
             editor_settings.grid_color[1],
@@ -1632,6 +1698,15 @@ impl EditorApp {
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.label(egui::RichText::new("Affichage du viewport").strong());
+                    let response = ui.checkbox(
+                        &mut self.editor_settings.show_grid_by_default,
+                        "Afficher la grille par défaut en mode édition",
+                    );
+                    if response.changed() {
+                        self.scene_view.options.show_grid =
+                            self.editor_settings.show_grid_by_default;
+                        settings_changed = true;
+                    }
                     settings_changed |= ui.checkbox(
                         &mut self.editor_settings.hide_grid_during_play,
                         "Masquer la grille pendant la lecture",
