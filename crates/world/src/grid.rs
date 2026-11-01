@@ -4,7 +4,7 @@ use crate::coords::TilePos;
 use serde::{Deserialize, Serialize};
 
 /// Définition d'un type de tuile propre à un projet.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TileDefinition {
     pub id: u16,
     pub name: String,
@@ -13,6 +13,19 @@ pub struct TileDefinition {
     /// Chemin de texture relatif au dossier racine du projet.
     #[serde(default)]
     pub texture: Option<String>,
+    /// Son joué lorsqu'un personnage se déplace sur ce type de tuile.
+    #[serde(default)]
+    pub footstep_sound: Option<String>,
+    /// Sons alternatifs choisis aléatoirement avec le son principal.
+    #[serde(default)]
+    pub footstep_variants: Vec<String>,
+    /// Volume du son principal, normalisé entre 0 et 1.
+    #[serde(default = "default_footstep_volume")]
+    pub footstep_volume: f32,
+    /// Volumes alternatifs dans l'ordre de `footstep_variants`.
+    /// Les anciens projets reprennent le volume principal comme valeur initiale.
+    #[serde(default)]
+    pub footstep_variant_volumes: Vec<f32>,
     /// Métadonnée destinée aux futurs outils de collision.
     #[serde(default)]
     pub has_collisions: bool,
@@ -31,11 +44,19 @@ impl TileDefinition {
             name: name.into(),
             color,
             texture: None,
+            footstep_sound: None,
+            footstep_variants: Vec::new(),
+            footstep_volume: 1.0,
+            footstep_variant_volumes: Vec::new(),
             has_collisions: false,
             randomize_texture_rotation: false,
             editor_only: false,
         }
     }
+}
+
+fn default_footstep_volume() -> f32 {
+    1.0
 }
 
 /// Les six types historiques restent le jeu de tuiles initial de chaque projet.

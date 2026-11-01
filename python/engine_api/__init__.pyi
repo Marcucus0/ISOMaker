@@ -147,8 +147,9 @@ class GameUI:
         font_size: float = 24.0,
         color: tuple[int, int, int, int] | None = None,
         visible: bool = True,
+        background_color: tuple[int, int, int, int] | None = None,
     ) -> None:
-        """Crée ou met à jour un texte HUD, visible par défaut."""
+        """Crée un texte HUD ; background_color est RGBA et None désactive le fond."""
         ...
 
     def update_text(self, id: str, text: str) -> None: ...

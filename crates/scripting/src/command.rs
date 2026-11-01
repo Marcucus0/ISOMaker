@@ -30,6 +30,7 @@ pub struct HudText {
     pub font_size: f32,
     pub color: [u8; 4],
     pub visible: bool,
+    pub background_color: Option<[u8; 4]>,
 }
 
 /// Une commande émise par un script Python.

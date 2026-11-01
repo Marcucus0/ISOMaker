@@ -1,4 +1,4 @@
-# Todo lis
+# Todo list
 
 
 ## Editeur de tuile (logiciel presque à part)
@@ -10,10 +10,5 @@
 
 ## Ajouter des sons :
 - système pour gérer la musique
-- propriété sur les tiles quand on marche dessus
 
 ## Ajouter un système d'animation de sprite
-
-## Faire en sorte de pouvoir sélectionner dans les champs texture et scripts directement dans les assets si besoin
-
-## Dans les assets, pour l'instant on a seulement des icones de fichier / dossier mais j'aimerais des icones pour les images (gif compris), les scripts

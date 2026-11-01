@@ -3,7 +3,7 @@
 //! - Gauche : hiérarchie de la scène, palette de tuiles et gestionnaire de fichiers du projet.
 
 use egui::Ui;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -36,6 +36,9 @@ pub struct LeftPanel {
     tile_preview_cache: HashMap<String, Option<egui::TextureHandle>>,
     browser_root: Option<PathBuf>,
     browser_current: Option<PathBuf>,
+    browser_selection_directory: Option<PathBuf>,
+    selected_asset_paths: HashSet<PathBuf>,
+    asset_selection_anchor: Option<PathBuf>,
     browser_scan_path: Option<PathBuf>,
     browser_entries: Vec<BrowserEntry>,
     browser_refreshed_at: Instant,
@@ -47,6 +50,12 @@ pub struct LeftPanel {
 struct BrowserEntry {
     path: PathBuf,
     is_directory: bool,
+    is_parent_entry: bool,
+}
+
+#[derive(Clone)]
+struct BrowserDragPayload {
+    paths: Vec<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -67,6 +76,9 @@ impl Default for LeftPanel {
             tile_preview_cache: HashMap::new(),
             browser_root: None,
             browser_current: None,
+            browser_selection_directory: None,
+            selected_asset_paths: HashSet::new(),
+            asset_selection_anchor: None,
             browser_scan_path: None,
             browser_entries: Vec::new(),
             browser_refreshed_at: Instant::now(),
@@ -199,7 +211,7 @@ impl LeftPanel {
         tiles: &mut Vec<TileDefinition>,
         asset_root: Option<&Path>,
     ) -> PanelAction {
-        let mut action = PanelAction::None;
+        let action = PanelAction::None;
         ui.label("Tuiles du projet");
         ui.separator();
         for tile in tiles.iter() {
@@ -252,61 +264,6 @@ impl LeftPanel {
             }
         }
 
-        if let Some(tile) = tiles
-            .iter_mut()
-            .find(|tile| tile.id == self.selected_tile_type)
-        {
-            ui.separator();
-            ui.label(egui::RichText::new("Propriétés de la tuile").strong());
-            ui.horizontal(|ui| {
-                ui.label("Nom");
-                ui.text_edit_singleline(&mut tile.name);
-            });
-            let mut color = egui::Color32::from_rgba_unmultiplied(
-                tile.color[0],
-                tile.color[1],
-                tile.color[2],
-                tile.color[3],
-            );
-            ui.horizontal(|ui| {
-                ui.label("Couleur");
-                if ui.color_edit_button_srgba(&mut color).changed() {
-                    tile.color = [color.r(), color.g(), color.b(), color.a()];
-                }
-            });
-            ui.checkbox(&mut tile.has_collisions, "Collisions activées");
-            ui.checkbox(
-                &mut tile.randomize_texture_rotation,
-                "Orientation de texture aléatoire",
-            );
-            if tile.id > 6 {
-                ui.checkbox(&mut tile.editor_only, "Visible dans l'éditeur uniquement")
-                    .on_hover_text(
-                        "Cette tuile reste visible dans l'éditeur et disparaît en Lecture.",
-                    );
-            }
-            ui.horizontal(|ui| {
-                if ui.button("Choisir une texture…").clicked() {
-                    action = PanelAction::ChooseTileTexture(tile.id);
-                }
-                if tile.texture.is_some() && ui.small_button("Retirer").clicked() {
-                    tile.texture = None;
-                }
-            });
-            if let Some(texture) = &tile.texture {
-                ui.label(egui::RichText::new(texture).small().weak());
-            } else {
-                ui.label(egui::RichText::new("Aucune texture").small().weak());
-            }
-            ui.label(
-                egui::RichText::new(format!("ID : {}", tile.id))
-                    .small()
-                    .weak(),
-            );
-            if tile.id > 6 && ui.button("Supprimer cette tuile…").clicked() {
-                action = PanelAction::DeleteTileDefinition(tile.id);
-            }
-        }
         action
     }
 
@@ -465,6 +422,11 @@ impl LeftPanel {
             self.browser_scan_path = None;
         }
         let current = self.browser_current.clone().unwrap_or_else(|| root.clone());
+        if self.browser_selection_directory.as_ref() != Some(&current) {
+            self.browser_selection_directory = Some(current.clone());
+            self.selected_asset_paths.clear();
+            self.asset_selection_anchor = None;
+        }
         if self.browser_scan_path.as_ref() != Some(&current)
             || self.browser_refreshed_at.elapsed() >= Duration::from_secs(1)
         {
@@ -509,6 +471,11 @@ impl LeftPanel {
                     self.browser_current = Some(parent.to_path_buf());
                 }
             }
+            if let Some(payload) = back_response.dnd_release_payload::<BrowserDragPayload>() {
+                if let Some(parent) = current.parent() {
+                    action = move_payload_to(payload.paths.as_slice(), parent);
+                }
+            }
             let displayed = current.strip_prefix(&root).unwrap_or(&current);
             let displayed = if displayed.as_os_str().is_empty() {
                 ".".into()
@@ -527,20 +494,33 @@ impl LeftPanel {
                         self.browser_name.clear();
                         ui.close_menu();
                     }
+                    if ui.button("Importer un média…").clicked() {
+                        action = PanelAction::ImportMedia;
+                        ui.close_menu();
+                    }
                 });
             if ui.button("Actualiser").clicked() {
                 self.browser_scan_path = None;
+            }
+            if ui
+                .button("Importer…")
+                .on_hover_text(
+                    "Copier une image, un son ou une vidéo dans le dossier dédié du projet",
+                )
+                .clicked()
+            {
+                action = PanelAction::ImportMedia;
             }
         });
         ui.separator();
 
         let background_rect = ui.available_rect_before_wrap();
-        ui.interact(
+        let background_response = ui.interact(
             background_rect,
             egui::Id::new("project_browser_background_context"),
             egui::Sense::click(),
-        )
-        .context_menu(|ui| {
+        );
+        background_response.clone().context_menu(|ui| {
             if ui.button("Nouveau dossier…").clicked() {
                 self.browser_dialog = Some(BrowserDialog::CreateDirectory(current.clone()));
                 self.browser_name.clear();
@@ -551,26 +531,151 @@ impl LeftPanel {
                 self.browser_name.clear();
                 ui.close_menu();
             }
+            if ui.button("Importer un média…").clicked() {
+                action = PanelAction::ImportMedia;
+                ui.close_menu();
+            }
         });
 
-        let entries = self.browser_entries.clone();
+        let mut entries = self.browser_entries.clone();
+        if current != root {
+            if let Some(parent) = current.parent() {
+                entries.insert(
+                    0,
+                    BrowserEntry {
+                        path: parent.to_path_buf(),
+                        is_directory: true,
+                        is_parent_entry: true,
+                    },
+                );
+            }
+        }
         egui::ScrollArea::vertical().show(ui, |ui| {
             for entry in entries {
-                let name = entry
-                    .path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("?");
+                let name = if entry.is_parent_entry {
+                    ".."
+                } else {
+                    entry
+                        .path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("?")
+                };
+                let is_selected = self.selected_asset_paths.contains(&entry.path);
                 let response = ui
                     .horizontal(|ui| {
-                        draw_browser_icon(ui, entry.is_directory);
-                        ui.selectable_label(false, name)
+                        draw_browser_icon(ui, &entry.path, entry.is_directory);
+                        let font_id = egui::TextStyle::Body.resolve(ui.style());
+                        let text_color = if is_selected {
+                            ui.visuals().widgets.active.text_color()
+                        } else {
+                            ui.visuals().text_color()
+                        };
+                        let (text_rect, response) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                            egui::Sense::click_and_drag(),
+                        );
+                        if is_selected {
+                            ui.painter().rect_filled(
+                                text_rect,
+                                2.0,
+                                ui.visuals().selection.bg_fill,
+                            );
+                        }
+                        ui.painter().with_clip_rect(text_rect).text(
+                            text_rect.left_center() + egui::vec2(4.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            name,
+                            font_id,
+                            text_color,
+                        );
+                        response
                     })
                     .inner;
+                if response.hovered()
+                    || response.dnd_hover_payload::<BrowserDragPayload>().is_some()
+                {
+                    ui.painter().rect_stroke(
+                        response.rect,
+                        2.0,
+                        egui::Stroke::new(
+                            1.0_f32,
+                            if response.dnd_hover_payload::<BrowserDragPayload>().is_some() {
+                                egui::Color32::LIGHT_BLUE
+                            } else {
+                                ui.visuals().widgets.hovered.fg_stroke.color
+                            },
+                        ),
+                    );
+                }
                 if entry.is_directory && response.clicked() {
                     self.browser_current = Some(entry.path.clone());
-                } else if !entry.is_directory && response.double_clicked() {
-                    action = PanelAction::OpenFile(entry.path.clone());
+                    self.selected_asset_paths.clear();
+                    self.asset_selection_anchor = None;
+                } else if !entry.is_directory && response.clicked() {
+                    let shift_held = ui.input(|input| input.modifiers.shift);
+                    if shift_held {
+                        let files: Vec<PathBuf> = self
+                            .browser_entries
+                            .iter()
+                            .filter(|browser_entry| !browser_entry.is_directory)
+                            .map(|browser_entry| browser_entry.path.clone())
+                            .collect();
+                        let anchor_index = self
+                            .asset_selection_anchor
+                            .as_ref()
+                            .and_then(|anchor| files.iter().position(|path| path == anchor));
+                        let clicked_index = files.iter().position(|path| path == &entry.path);
+                        if let (Some(anchor_index), Some(clicked_index)) =
+                            (anchor_index, clicked_index)
+                        {
+                            let (start, end) = if anchor_index <= clicked_index {
+                                (anchor_index, clicked_index)
+                            } else {
+                                (clicked_index, anchor_index)
+                            };
+                            self.selected_asset_paths.clear();
+                            self.selected_asset_paths
+                                .extend(files[start..=end].iter().cloned());
+                        } else {
+                            self.selected_asset_paths.clear();
+                            self.selected_asset_paths.insert(entry.path.clone());
+                            self.asset_selection_anchor = Some(entry.path.clone());
+                        }
+                    } else {
+                        self.selected_asset_paths.clear();
+                        self.selected_asset_paths.insert(entry.path.clone());
+                        self.asset_selection_anchor = Some(entry.path.clone());
+                    }
+                    if response.double_clicked() {
+                        action = PanelAction::OpenFile(entry.path.clone());
+                    }
+                }
+                if !entry.is_parent_entry && active_project_file != Some(entry.path.as_path()) {
+                    let mut paths: Vec<PathBuf> =
+                        if !entry.is_directory && self.selected_asset_paths.contains(&entry.path) {
+                            self.selected_asset_paths
+                                .iter()
+                                .filter(|path| Some(path.as_path()) != active_project_file)
+                                .cloned()
+                                .collect()
+                        } else {
+                            vec![entry.path.clone()]
+                        };
+                    paths.sort();
+                    response.dnd_set_drag_payload(BrowserDragPayload { paths });
+                }
+                if entry.is_directory {
+                    if response.dnd_hover_payload::<BrowserDragPayload>().is_some() {
+                        ui.painter().rect_stroke(
+                            response.rect,
+                            1.0,
+                            egui::Stroke::new(1.0_f32, egui::Color32::LIGHT_BLUE),
+                        );
+                    }
+                    if let Some(payload) = response.dnd_release_payload::<BrowserDragPayload>() {
+                        action = move_payload_to(payload.paths.as_slice(), &entry.path);
+                    }
                 }
                 response
                     .on_hover_text(entry.path.display().to_string())
@@ -590,8 +695,14 @@ impl LeftPanel {
                             self.browser_name.clear();
                             ui.close_menu();
                         }
+                        if ui.button("Importer un média…").clicked() {
+                            action = PanelAction::ImportMedia;
+                            ui.close_menu();
+                        }
                         ui.separator();
-                        if active_project_file != Some(entry.path.as_path()) {
+                        if !entry.is_parent_entry
+                            && active_project_file != Some(entry.path.as_path())
+                        {
                             if ui.button("Renommer…").clicked() {
                                 self.browser_dialog =
                                     Some(BrowserDialog::Rename(entry.path.clone()));
@@ -606,6 +717,9 @@ impl LeftPanel {
                     });
             }
         });
+        if let Some(payload) = background_response.dnd_release_payload::<BrowserDragPayload>() {
+            action = move_payload_to(payload.paths.as_slice(), &current);
+        }
 
         if let Some(dialog) = self.browser_dialog.clone() {
             let title = match dialog {
@@ -702,11 +816,13 @@ fn read_browser_entries(directory: &Path) -> Vec<BrowserEntry> {
                 Some(BrowserEntry {
                     path: entry.path(),
                     is_directory: true,
+                    is_parent_entry: false,
                 })
             } else if file_type.is_file() {
                 Some(BrowserEntry {
                     path: entry.path(),
                     is_directory: false,
+                    is_parent_entry: false,
                 })
             } else {
                 None
@@ -721,7 +837,24 @@ fn read_browser_entries(directory: &Path) -> Vec<BrowserEntry> {
     entries
 }
 
-fn draw_browser_icon(ui: &mut Ui, is_directory: bool) {
+fn move_payload_to(paths: &[PathBuf], destination_directory: &Path) -> PanelAction {
+    let moves: Vec<(PathBuf, PathBuf)> = paths
+        .iter()
+        .filter_map(|source| {
+            let name = source.file_name()?;
+            let destination = destination_directory.join(name);
+            (source != &destination && source.parent() != Some(destination_directory))
+                .then(|| (source.clone(), destination))
+        })
+        .collect();
+    if moves.is_empty() {
+        PanelAction::None
+    } else {
+        PanelAction::MovePaths(moves)
+    }
+}
+
+fn draw_browser_icon(ui: &mut Ui, path: &Path, is_directory: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 17.0), egui::Sense::hover());
     let painter = ui.painter();
     let p = |x: f32, y: f32| egui::pos2(rect.left() + x, rect.top() + y);
@@ -755,38 +888,169 @@ fn draw_browser_icon(ui: &mut Ui, is_directory: bool) {
             painter.line_segment([pair[0], pair[1]], egui::Stroke::new(1.0_f32, edge));
         }
     } else {
-        let fill = egui::Color32::from_rgb(190, 202, 216);
-        let edge = egui::Color32::from_rgb(226, 234, 243);
-        painter.rect_filled(
-            egui::Rect::from_min_size(p(3.0, 1.0), egui::vec2(10.0, 14.0)),
-            1.0,
-            fill,
-        );
-        let points = [
-            p(3.0, 1.0),
-            p(9.0, 1.0),
-            p(13.0, 5.0),
-            p(13.0, 15.0),
-            p(3.0, 15.0),
-            p(3.0, 1.0),
-        ];
-        for pair in points.windows(2) {
-            painter.line_segment([pair[0], pair[1]], egui::Stroke::new(1.0_f32, edge));
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(
+            extension.as_str(),
+            "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif"
+        ) {
+            draw_image_file_icon(ui, rect, extension == "gif");
+        } else if matches!(extension.as_str(), "py" | "pyi" | "pyw") {
+            draw_labeled_file_icon(ui, rect, "Py", egui::Color32::from_rgb(43, 111, 177));
+        } else if matches!(
+            extension.as_str(),
+            "wav" | "mp3" | "ogg" | "flac" | "aac" | "m4a" | "wma" | "opus"
+        ) {
+            draw_labeled_file_icon(ui, rect, "♪", egui::Color32::from_rgb(44, 145, 157));
+        } else if matches!(
+            extension.as_str(),
+            "mp4" | "mov" | "avi" | "mkv" | "webm" | "m4v" | "mpg" | "mpeg"
+        ) {
+            draw_labeled_file_icon(ui, rect, "▶", egui::Color32::from_rgb(142, 91, 174));
+        } else if extension == "json" {
+            draw_labeled_file_icon(ui, rect, "{}", egui::Color32::from_rgb(184, 104, 38));
+        } else if matches!(
+            extension.as_str(),
+            "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "lua" | "rs" | "sh" | "bat" | "ps1"
+        ) {
+            let label = if matches!(
+                extension.as_str(),
+                "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx"
+            ) {
+                "JS"
+            } else {
+                "S"
+            };
+            draw_labeled_file_icon(ui, rect, label, egui::Color32::from_rgb(133, 82, 168));
+        } else {
+            draw_document_file_icon(ui, rect);
         }
-        painter.line_segment([p(9.0, 1.0), p(9.0, 5.0)], egui::Stroke::new(1.0_f32, edge));
-        painter.line_segment(
-            [p(9.0, 5.0), p(13.0, 5.0)],
-            egui::Stroke::new(1.0_f32, edge),
+    }
+}
+
+fn draw_image_file_icon(ui: &Ui, rect: egui::Rect, is_gif: bool) {
+    let painter = ui.painter();
+    let image_rect =
+        egui::Rect::from_min_size(rect.min + egui::vec2(1.0, 2.0), egui::vec2(14.0, 12.0));
+    painter.rect_filled(image_rect, 2.0, egui::Color32::from_rgb(42, 68, 70));
+    painter.rect_stroke(
+        image_rect,
+        2.0,
+        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(112, 199, 179)),
+    );
+    painter.circle_filled(
+        egui::pos2(image_rect.right() - 3.0, image_rect.top() + 3.0),
+        1.5,
+        egui::Color32::from_rgb(255, 204, 105),
+    );
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(image_rect.left() + 1.0, image_rect.bottom() - 1.0),
+            egui::pos2(image_rect.left() + 5.0, image_rect.top() + 5.5),
+            egui::pos2(image_rect.left() + 8.0, image_rect.bottom() - 1.0),
+        ],
+        egui::Color32::from_rgb(105, 196, 143),
+        egui::Stroke::NONE,
+    ));
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(image_rect.left() + 5.0, image_rect.bottom() - 1.0),
+            egui::pos2(image_rect.left() + 9.0, image_rect.top() + 6.0),
+            egui::pos2(image_rect.right() - 1.0, image_rect.bottom() - 1.0),
+        ],
+        egui::Color32::from_rgb(91, 160, 207),
+        egui::Stroke::NONE,
+    ));
+    if is_gif {
+        let badge = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + 7.0, rect.bottom() - 6.0),
+            egui::vec2(9.0, 6.0),
         );
-        painter.line_segment(
-            [p(5.0, 8.0), p(11.0, 8.0)],
-            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(104, 119, 137)),
-        );
-        painter.line_segment(
-            [p(5.0, 11.0), p(11.0, 11.0)],
-            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(104, 119, 137)),
+        painter.rect_filled(badge, 1.0, egui::Color32::from_rgb(181, 91, 195));
+        painter.text(
+            badge.center(),
+            egui::Align2::CENTER_CENTER,
+            "GIF",
+            egui::FontId::proportional(4.5),
+            egui::Color32::WHITE,
         );
     }
+}
+
+fn draw_labeled_file_icon(ui: &Ui, rect: egui::Rect, label: &str, fill: egui::Color32) {
+    let painter = ui.painter();
+    let badge = egui::Rect::from_min_size(rect.min + egui::vec2(1.0, 1.0), egui::vec2(14.0, 15.0));
+    painter.rect_filled(badge, 2.0, fill);
+    painter.rect_stroke(
+        badge,
+        2.0,
+        egui::Stroke::new(1.0_f32, egui::Color32::from_white_alpha(150)),
+    );
+    painter.text(
+        badge.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::monospace(8.0),
+        egui::Color32::WHITE,
+    );
+}
+
+fn draw_document_file_icon(ui: &Ui, rect: egui::Rect) {
+    draw_document_outline(ui.painter(), rect);
+    let painter = ui.painter();
+    let gray = egui::Color32::from_rgb(104, 119, 137);
+    painter.line_segment(
+        [
+            egui::pos2(rect.left() + 5.0, rect.top() + 9.0),
+            egui::pos2(rect.right() - 4.0, rect.top() + 9.0),
+        ],
+        egui::Stroke::new(1.0_f32, gray),
+    );
+    painter.line_segment(
+        [
+            egui::pos2(rect.left() + 5.0, rect.top() + 12.0),
+            egui::pos2(rect.right() - 4.0, rect.top() + 12.0),
+        ],
+        egui::Stroke::new(1.0_f32, gray),
+    );
+}
+
+fn draw_document_outline(painter: &egui::Painter, rect: egui::Rect) {
+    let p = |x: f32, y: f32| egui::pos2(rect.left() + x, rect.top() + y);
+    let fill = egui::Color32::from_rgb(190, 202, 216);
+    let edge = egui::Color32::from_rgb(226, 234, 243);
+    painter.rect_filled(
+        egui::Rect::from_min_size(p(3.0, 1.0), egui::vec2(10.0, 14.0)),
+        1.0,
+        fill,
+    );
+    let points = [
+        p(3.0, 1.0),
+        p(9.0, 1.0),
+        p(13.0, 5.0),
+        p(13.0, 15.0),
+        p(3.0, 15.0),
+        p(3.0, 1.0),
+    ];
+    for pair in points.windows(2) {
+        painter.line_segment([pair[0], pair[1]], egui::Stroke::new(1.0_f32, edge));
+    }
+    painter.line_segment([p(9.0, 1.0), p(9.0, 5.0)], egui::Stroke::new(1.0_f32, edge));
+    painter.line_segment(
+        [p(9.0, 5.0), p(13.0, 5.0)],
+        egui::Stroke::new(1.0_f32, edge),
+    );
+    painter.line_segment(
+        [p(5.0, 8.0), p(11.0, 8.0)],
+        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(104, 119, 137)),
+    );
+    painter.line_segment(
+        [p(5.0, 11.0), p(11.0, 11.0)],
+        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(104, 119, 137)),
+    );
 }
 
 fn is_valid_browser_name(name: &str) -> bool {
@@ -808,9 +1072,11 @@ fn is_valid_browser_name(name: &str) -> bool {
 pub enum PanelAction {
     None,
     OpenFile(PathBuf),
+    ImportMedia,
     CreateFile(PathBuf),
     CreateDirectory(PathBuf),
     RenamePath(PathBuf, PathBuf),
+    MovePaths(Vec<(PathBuf, PathBuf)>),
     DeletePath(PathBuf),
     AddObject,
     AddCamera,
@@ -820,8 +1086,6 @@ pub enum PanelAction {
     DeleteCustomObjectType(Uuid),
     SelectObject(ObjectId),
     DeleteObject(ObjectId),
-    DeleteTileDefinition(u16),
-    ChooseTileTexture(u16),
 }
 
 pub(crate) fn custom_property_kind_label(kind: CustomPropertyKind) -> &'static str {

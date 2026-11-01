@@ -80,7 +80,18 @@ de collision, une option de rotation pseudo-aléatoire de la texture par case et
 un indicateur `editor_only`. Ces tuiles restent visibles dans l'éditeur et sont
 omises du rendu en Lecture, y compris à faible zoom. Les anciens projets
 chargent ce champ à `false`. Les textures sont importées dans les assets du
-projet. Une définition personnalisée peut être supprimée après confirmation ;
+projet ; la palette de gauche sert à choisir le type de tuile et sa définition
+se modifie dans l'inspecteur.
+Une définition peut aussi référencer un son de pas principal et des
+variantes WAV, MP3 ou OGG, copiés dans les assets du projet. Chaque son a son
+propre volume de 0 à 100 % et un bouton d'aperçu lecture/arrêt ; une variante
+est choisie au hasard à chaque pas. En Lecture, le son est joué lorsqu'un
+script déplace avec succès un objet
+non-camera d'une case vers une tuile portant ce type ; les mouvements bloqués
+et les déplacements de plusieurs cases ne déclenchent pas ce son. Les champs
+audio sont optionnels. Les anciens projets gardent le volume principal et
+l'utilisent provisoirement pour les variantes auxquelles aucun volume n'est
+encore associé. Une définition personnalisée peut être supprimée après confirmation ;
 les cases qui la référencent sont effacées dans toutes les scènes et les fichiers
 `tile-<id>.json` obsolètes sont retirés à l'enregistrement. La collision est une
 métadonnée utilisée pendant les déplacements en Lecture.
@@ -118,25 +129,32 @@ Les textures sont copiées dans un dossier propre au projet, voisin du fichier :
 mon_projet.isomaker
 mon_projet/
 ├── assets/
-│   └── textures choisies par l'utilisateur
+│   ├── images/
+│   ├── audio/
+│   └── videos/
+├── scripts/
 └── tiles/
     └── tile-00007.json
 ```
 
-Les objets et les tuiles enregistrent un chemin relatif de la forme
-`mon_projet/assets/nom.ext`, résolu depuis le dossier contenant le fichier
-`.isomaker`. Au premier enregistrement, les textures référencées sont copiées
-dans ce dossier et les chemins du projet sont actualisés. Une texture choisie
-après l'enregistrement est copiée directement dans le même dossier. Les
-collisions de noms de fichiers reçoivent un suffixe. Les textures intégrées au
-dépôt sous `assets/` ne sont pas automatiquement liées aux objets. Le panneau
-Assets est un gestionnaire de fichiers enraciné dans le dossier `<nom_du_projet>/`
-à côté du fichier `.isomaker`; il permet de naviguer dans `assets/`, `scripts/`
-et les autres fichiers du projet. Un double-clic ouvre un fichier avec son application
-Windows par défaut. Les menus contextuels permettent de créer des fichiers et
-dossiers ainsi que de renommer les éléments. Un renommage met à jour les
-chemins de texture des objets et des tuiles, la propriété `texture` des objets,
-les scripts d'objets et le script du monde, puis sauvegarde le projet.
+Les médias importés sont copiés dans `assets/images/`, `assets/audio/` ou
+`assets/videos/`. Au premier enregistrement, les images et sons déjà référencés
+sont également copiés dans leur dossier dédié, et leurs chemins sont actualisés.
+Les anciens chemins sous `assets/` restent lisibles. Les collisions de noms de
+fichiers reçoivent un suffixe. Les textures intégrées au dépôt sous `assets/`
+ne sont pas automatiquement liées aux objets. Le panneau Assets est un
+gestionnaire de fichiers enraciné dans le dossier `<nom_du_projet>/` à côté du
+fichier `.isomaker`; il permet de naviguer dans `assets/`, `scripts/` et les
+autres fichiers du projet. Un double-clic ouvre un fichier avec son application
+par défaut. Les menus contextuels permettent de créer, importer, renommer et
+supprimer des fichiers et dossiers. Les assets peuvent être déplacés entre
+dossiers par glisser-déposer ; les chemins des textures d'objets, des types
+d'objets, des tuiles et des scripts sont actualisés, ainsi que ceux des sons de
+pas. Le gestionnaire différencie les icônes des images, sons, vidéos, scripts,
+fichiers JSON et autres fichiers. Un clic sélectionne un fichier et Maj+clic
+étend la sélection aux fichiers intermédiaires ; faire glisser un fichier
+sélectionné déplace le groupe. Les déplacements sont enregistrés dans
+l'historique d'édition et peuvent être annulés ou rétablis.
 
 Dans l'inspecteur, les champs texture et script proposent séparément jusqu'à
 douze derniers fichiers utilisés. Les textures sont filtrées aux formats PNG,
@@ -361,7 +379,8 @@ d'interface, indépendants du zoom de la scène. Le HUD est éphémère, partag�
 les scripts, visible en pause et vidé au Stop ; il n'est pas sérialisé.
 `set_text(..., visible=False)` peut créer un texte caché. `game.ui.fade_in` et
 `game.ui.fade_out` animent son opacité ; le fondu sortant supprime le texte à
-la fin.
+la fin. Chaque texte peut avoir un fond RGBA optionnel, avec une marge et des
+coins arrondis calculés autour de son contenu.
 La barre de statut permet de masquer le sélecteur caméra/vue libre et le
 compteur FPS pendant la Lecture.
 

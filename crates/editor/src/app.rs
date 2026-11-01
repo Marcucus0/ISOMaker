@@ -7,13 +7,14 @@
 
 use crate::{
     inspector::Inspector,
-    panels::{LeftPanel, PanelAction},
+    panels::{LeftPanel, LeftPanelTab, PanelAction},
     scene_view::SceneView,
     toolbar::Toolbar,
 };
 use egui::Context;
 use engine::game_loop::{EngineMode, GameLoop};
 use engine::InputState;
+use rodio::{Decoder, DeviceSinkBuilder, Player};
 use scripting::{GameCommand, ScriptRuntime};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -51,9 +52,10 @@ pub struct EditorState {
     /// Messages de log accumulés.
     pub log_messages: VecDeque<LogEntry>,
     /// Historique des états de scène pour annuler/rétablir les éditions.
-    undo_history: Vec<String>,
-    redo_history: Vec<String>,
+    undo_history: Vec<HistoryEntry>,
+    redo_history: Vec<HistoryEntry>,
     next_log_id: u64,
+    pending_footstep_sounds: Vec<(String, f32)>,
 }
 
 struct HudFade {
@@ -61,7 +63,14 @@ struct HudFade {
     duration: f32,
     start_alpha: u8,
     target_alpha: u8,
+    start_background_alpha: Option<u8>,
+    target_background_alpha: Option<u8>,
     remove_on_complete: bool,
+}
+
+struct HistoryEntry {
+    scene_json: String,
+    asset_moves: Vec<(std::path::PathBuf, std::path::PathBuf)>,
 }
 
 #[derive(Clone)]
@@ -98,6 +107,7 @@ impl EditorState {
             undo_history: Vec::new(),
             redo_history: Vec::new(),
             next_log_id: 1,
+            pending_footstep_sounds: Vec::new(),
         }
     }
 
@@ -124,14 +134,20 @@ impl EditorState {
     }
 
     fn refresh_script_scenes(&mut self) {
-        let scenes = self.project.world.scenes.iter().map(|scene| {
-            let mut objects = scene.objects.values().cloned().collect::<Vec<_>>();
-            objects.sort_by_key(|object| object.id.to_string());
-            scripting::api::SceneSnapshot {
-                name: scene.meta.name.clone(),
-                objects,
-            }
-        }).collect();
+        let scenes = self
+            .project
+            .world
+            .scenes
+            .iter()
+            .map(|scene| {
+                let mut objects = scene.objects.values().cloned().collect::<Vec<_>>();
+                objects.sort_by_key(|object| object.id.to_string());
+                scripting::api::SceneSnapshot {
+                    name: scene.meta.name.clone(),
+                    objects,
+                }
+            })
+            .collect();
         self.script_runtime.set_scenes(scenes);
     }
 
@@ -195,7 +211,7 @@ impl EditorState {
             self.refresh_script_scenes();
             self.scene_stack.clear();
             match self.script_runtime.call_start() {
-                Ok(cmds) => self.apply_commands(cmds),
+                Ok(cmds) => self.apply_commands(cmds, false),
                 Err(e) => self.push_log(log::Level::Error, format!("on_start : {e}")),
             }
             let objects = self
@@ -205,7 +221,7 @@ impl EditorState {
                 .cloned()
                 .collect::<Vec<_>>();
             match self.script_runtime.call_world_launch(&objects) {
-                Ok(cmds) => self.apply_commands(cmds),
+                Ok(cmds) => self.apply_commands(cmds, false),
                 Err(e) => self.push_log(log::Level::Error, format!("_on_game_launch : {e}")),
             }
             let objects = self
@@ -215,7 +231,7 @@ impl EditorState {
                 .cloned()
                 .collect::<Vec<_>>();
             match self.script_runtime.call_object_launch(&objects) {
-                Ok(cmds) => self.apply_commands(cmds),
+                Ok(cmds) => self.apply_commands(cmds, false),
                 Err(e) => self.push_log(
                     log::Level::Error,
                     format!("Script objet _on_game_launch : {e}"),
@@ -244,6 +260,7 @@ impl EditorState {
         self.game_loop.stop();
         self.area_overlaps.clear();
         self.scene_stack.clear();
+        self.pending_footstep_sounds.clear();
         self.hud_texts.clear();
         self.hud_fades.clear();
         if !has_active_session {
@@ -275,7 +292,7 @@ impl EditorState {
         self.refresh_script_scenes();
         if self.script_runtime.has_legacy_update() {
             match self.script_runtime.call_update(delta_time) {
-                Ok(cmds) => self.apply_commands(cmds),
+                Ok(cmds) => self.apply_commands(cmds, true),
                 Err(e) => self.push_log(log::Level::Error, format!("on_update : {e}")),
             }
         }
@@ -300,7 +317,7 @@ impl EditorState {
                 {
                     Ok(cmds) => {
                         world_changed_scene = !cmds.is_empty();
-                        self.apply_commands(cmds);
+                        self.apply_commands(cmds, true);
                     }
                     Err(e) => self.push_log(log::Level::Error, format!("_on_update : {e}")),
                 }
@@ -315,7 +332,7 @@ impl EditorState {
                     .script_runtime
                     .call_object_update(delta_time, &objects, &self.input)
                 {
-                    Ok(cmds) => self.apply_commands(cmds),
+                    Ok(cmds) => self.apply_commands(cmds, true),
                     Err(e) => {
                         self.push_log(log::Level::Error, format!("Script objet _on_update : {e}"))
                     }
@@ -327,7 +344,7 @@ impl EditorState {
 
     fn update_hud_fades(&mut self, delta_time: f32) {
         let dt = delta_time.max(0.0);
-        let mut completed = Vec::new();
+        let mut completed: Vec<String> = Vec::new();
         for (id, fade) in &mut self.hud_fades {
             fade.elapsed = (fade.elapsed + dt).min(fade.duration);
             if let Some(text) = self.hud_texts.get_mut(id) {
@@ -335,13 +352,26 @@ impl EditorState {
                 let alpha = f32::from(fade.start_alpha)
                     + (f32::from(fade.target_alpha) - f32::from(fade.start_alpha)) * progress;
                 text.color[3] = alpha.round() as u8;
+                if let (Some(background), Some(start), Some(target)) = (
+                    text.background_color.as_mut(),
+                    fade.start_background_alpha,
+                    fade.target_background_alpha,
+                ) {
+                    let alpha =
+                        f32::from(start) + (f32::from(target) - f32::from(start)) * progress;
+                    background[3] = alpha.round() as u8;
+                }
             }
             if fade.elapsed >= fade.duration {
                 completed.push(id.clone());
             }
         }
         for id in completed {
-            if self.hud_fades.remove(&id).is_some_and(|fade| fade.remove_on_complete) {
+            if self
+                .hud_fades
+                .remove(&id)
+                .is_some_and(|fade| fade.remove_on_complete)
+            {
                 self.hud_texts.remove(&id);
             }
         }
@@ -363,7 +393,7 @@ impl EditorState {
             .script_runtime
             .call_object_click(&object_id.to_string(), &objects, &self.input)
         {
-            Ok(commands) => self.apply_commands(commands),
+            Ok(commands) => self.apply_commands(commands, false),
             Err(error) => self.push_log(log::Level::Error, format!("_on_click : {error}")),
         }
     }
@@ -432,14 +462,14 @@ impl EditorState {
                 &objects,
                 &self.input,
             ) {
-                Ok(commands) => self.apply_commands(commands),
+                Ok(commands) => self.apply_commands(commands, false),
                 Err(error) => self.push_log(log::Level::Error, format!("{hook} : {error}")),
             }
         }
     }
 
     /// Applique les commandes Python sur la scène.
-    fn apply_commands(&mut self, cmds: Vec<GameCommand>) {
+    fn apply_commands(&mut self, cmds: Vec<GameCommand>, play_footsteps: bool) {
         for cmd in cmds {
             match cmd {
                 GameCommand::SetHudText(text) => {
@@ -447,45 +477,73 @@ impl EditorState {
                     self.hud_texts.insert(text.id.clone(), text);
                 }
                 GameCommand::UpdateHudText { id, text } => {
-                    if let Some(existing) = self.hud_texts.get_mut(&id) { existing.text = text; }
+                    if let Some(existing) = self.hud_texts.get_mut(&id) {
+                        existing.text = text;
+                    }
                 }
                 GameCommand::UpdateHudPosition { id, x, y } => {
-                    if let Some(existing) = self.hud_texts.get_mut(&id) { existing.x = x; existing.y = y; }
+                    if let Some(existing) = self.hud_texts.get_mut(&id) {
+                        existing.x = x;
+                        existing.y = y;
+                    }
                 }
                 GameCommand::UpdateHudAnchor { id, anchor } => {
-                    if let Some(existing) = self.hud_texts.get_mut(&id) { existing.anchor = anchor; }
+                    if let Some(existing) = self.hud_texts.get_mut(&id) {
+                        existing.anchor = anchor;
+                    }
                 }
                 GameCommand::UpdateHudFontSize { id, font_size } => {
-                    if let Some(existing) = self.hud_texts.get_mut(&id) { existing.font_size = font_size; }
+                    if let Some(existing) = self.hud_texts.get_mut(&id) {
+                        existing.font_size = font_size;
+                    }
                 }
                 GameCommand::UpdateHudColor { id, color } => {
                     self.hud_fades.remove(&id);
-                    if let Some(existing) = self.hud_texts.get_mut(&id) { existing.color = color; }
+                    if let Some(existing) = self.hud_texts.get_mut(&id) {
+                        existing.color = color;
+                    }
                 }
                 GameCommand::FadeOutHudText { id, duration } => {
                     if let Some(existing) = self.hud_texts.get(&id) {
                         let initial_alpha = existing.color[3];
-                        self.hud_fades.insert(id, HudFade {
-                            elapsed: 0.0,
-                            duration,
-                            start_alpha: initial_alpha,
-                            target_alpha: 0,
-                            remove_on_complete: true,
-                        });
+                        let initial_background_alpha =
+                            existing.background_color.map(|color| color[3]);
+                        self.hud_fades.insert(
+                            id,
+                            HudFade {
+                                elapsed: 0.0,
+                                duration,
+                                start_alpha: initial_alpha,
+                                target_alpha: 0,
+                                start_background_alpha: initial_background_alpha,
+                                target_background_alpha: initial_background_alpha.map(|_| 0),
+                                remove_on_complete: true,
+                            },
+                        );
                     }
                 }
                 GameCommand::FadeInHudText { id, duration } => {
                     if let Some(existing) = self.hud_texts.get_mut(&id) {
                         let target_alpha = existing.color[3];
+                        let target_background_alpha =
+                            existing.background_color.map(|color| color[3]);
                         existing.color[3] = 0;
+                        if let Some(background) = existing.background_color.as_mut() {
+                            background[3] = 0;
+                        }
                         existing.visible = true;
-                        self.hud_fades.insert(id, HudFade {
-                            elapsed: 0.0,
-                            duration,
-                            start_alpha: 0,
-                            target_alpha,
-                            remove_on_complete: false,
-                        });
+                        self.hud_fades.insert(
+                            id,
+                            HudFade {
+                                elapsed: 0.0,
+                                duration,
+                                start_alpha: 0,
+                                target_alpha,
+                                start_background_alpha: target_background_alpha.map(|_| 0),
+                                target_background_alpha,
+                                remove_on_complete: false,
+                            },
+                        );
                     }
                 }
                 GameCommand::RemoveHudText { id } => {
@@ -533,13 +591,63 @@ impl EditorState {
                             .get_object(id)
                             .map(|object| TilePos::with_z(x, y, object.tile_pos.z));
                         if let Some(destination) = destination {
+                            let source = self
+                                .active_scene()
+                                .get_object(id)
+                                .map(|object| object.clone());
                             let result = move_object_with_collisions(
                                 self.project.world.active_scene_mut(),
                                 &self.project.tile_definitions,
                                 id,
                                 destination,
                             );
-                            let _ = result;
+                            if play_footsteps && matches!(result, Ok(true)) {
+                                if let Some(source) = source {
+                                    let dx = (destination.x - source.tile_pos.x).abs();
+                                    let dy = (destination.y - source.tile_pos.y).abs();
+                                    if dx <= 1
+                                        && dy <= 1
+                                        && (dx != 0 || dy != 0)
+                                        && source.object_type != ObjectType::Camera
+                                    {
+                                        let tile = self.active_scene().get_tile(destination);
+                                        if let Some(definition) = self
+                                            .project
+                                            .tile_definitions
+                                            .iter()
+                                            .find(|definition| definition.id == tile.tile_type)
+                                        {
+                                            let sounds: Vec<_> = definition
+                                                .footstep_sound
+                                                .iter()
+                                                .chain(definition.footstep_variants.iter())
+                                                .collect();
+                                            let sound_count = sounds.len();
+                                            if sound_count > 0 {
+                                                let index = (u128::from_le_bytes(
+                                                    *uuid::Uuid::new_v4().as_bytes(),
+                                                ) % sound_count as u128)
+                                                    as usize;
+                                                let sound = sounds[index];
+                                                let primary_offset = usize::from(
+                                                    definition.footstep_sound.is_some(),
+                                                );
+                                                let volume = if primary_offset == 1 && index == 0 {
+                                                    definition.footstep_volume
+                                                } else {
+                                                    definition
+                                                        .footstep_variant_volumes
+                                                        .get(index - primary_offset)
+                                                        .copied()
+                                                        .unwrap_or(definition.footstep_volume)
+                                                };
+                                                self.pending_footstep_sounds
+                                                    .push((sound.clone(), volume.clamp(0.0, 1.0)));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -751,36 +859,60 @@ impl EditorState {
         });
     }
 
-    fn record_undo(&mut self, snapshot: String) {
+    fn record_undo(
+        &mut self,
+        snapshot: String,
+        asset_moves: Vec<(std::path::PathBuf, std::path::PathBuf)>,
+    ) {
         const HISTORY_LIMIT: usize = 128;
-        self.undo_history.push(snapshot);
+        self.undo_history.push(HistoryEntry {
+            scene_json: snapshot,
+            asset_moves,
+        });
         if self.undo_history.len() > HISTORY_LIMIT {
             self.undo_history.remove(0);
         }
         self.redo_history.clear();
     }
 
-    fn undo(&mut self) {
+    fn undo(&mut self) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
         if let Some(previous) = self.undo_history.pop() {
             if let Ok(current) = self.active_scene().to_json() {
-                self.redo_history.push(current);
+                self.redo_history.push(HistoryEntry {
+                    scene_json: current,
+                    asset_moves: previous.asset_moves.clone(),
+                });
             }
-            match Scene::from_json(&previous) {
+            match Scene::from_json(&previous.scene_json) {
                 Ok(scene) => *self.active_scene_mut() = scene,
                 Err(error) => self.push_log(log::Level::Error, format!("Annulation : {error}")),
             }
+            previous
+                .asset_moves
+                .into_iter()
+                .rev()
+                .map(|(old, new)| (new, old))
+                .collect()
+        } else {
+            Vec::new()
         }
     }
 
-    fn redo(&mut self) {
+    fn redo(&mut self) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
         if let Some(next) = self.redo_history.pop() {
             if let Ok(current) = self.active_scene().to_json() {
-                self.undo_history.push(current);
+                self.undo_history.push(HistoryEntry {
+                    scene_json: current,
+                    asset_moves: next.asset_moves.clone(),
+                });
             }
-            match Scene::from_json(&next) {
+            match Scene::from_json(&next.scene_json) {
                 Ok(scene) => *self.active_scene_mut() = scene,
                 Err(error) => self.push_log(log::Level::Error, format!("Rétablissement : {error}")),
             }
+            next.asset_moves
+        } else {
+            Vec::new()
         }
     }
 }
@@ -1169,6 +1301,95 @@ pub struct EditorApp {
     player_mode: bool,
     export_receiver: Option<Receiver<Result<std::path::PathBuf, String>>>,
     export_status: Option<String>,
+    audio_output: FootstepAudio,
+}
+
+#[derive(Default)]
+struct FootstepAudio {
+    sink: Option<rodio::MixerDeviceSink>,
+    unavailable: bool,
+    players: Vec<Player>,
+    previews: HashMap<String, Player>,
+}
+
+impl FootstepAudio {
+    fn play(&mut self, path: &std::path::Path, volume: f32) -> anyhow::Result<()> {
+        if self.unavailable {
+            anyhow::bail!("Aucune sortie audio disponible")
+        }
+        if self.sink.is_none() {
+            match DeviceSinkBuilder::open_default_sink() {
+                Ok(sink) => self.sink = Some(sink),
+                Err(error) => {
+                    self.unavailable = true;
+                    anyhow::bail!("Initialisation audio impossible : {error}")
+                }
+            }
+        }
+        let source = Decoder::try_from(std::fs::File::open(path)?)?;
+        let player = Player::connect_new(self.sink.as_ref().unwrap().mixer());
+        player.set_volume(volume.clamp(0.0, 1.0));
+        player.append(source);
+        self.players.retain(|player| !player.empty());
+        self.players.push(player);
+        Ok(())
+    }
+
+    fn stop_all(&mut self) {
+        for player in &self.players {
+            player.stop();
+        }
+        self.players.clear();
+        for player in self.previews.values() {
+            player.stop();
+        }
+        self.previews.clear();
+    }
+
+    fn stop_previews(&mut self) {
+        for player in self.previews.values() {
+            player.stop();
+        }
+        self.previews.clear();
+    }
+
+    fn preview_keys(&mut self) -> HashSet<String> {
+        self.previews.retain(|_, player| !player.empty());
+        self.previews.keys().cloned().collect()
+    }
+
+    fn stop_preview(&mut self, key: &str) {
+        if let Some(player) = self.previews.remove(key) {
+            player.stop();
+        }
+    }
+
+    fn play_preview(
+        &mut self,
+        key: String,
+        path: &std::path::Path,
+        volume: f32,
+    ) -> anyhow::Result<()> {
+        self.stop_preview(&key);
+        if self.unavailable {
+            anyhow::bail!("Aucune sortie audio disponible")
+        }
+        if self.sink.is_none() {
+            match DeviceSinkBuilder::open_default_sink() {
+                Ok(sink) => self.sink = Some(sink),
+                Err(error) => {
+                    self.unavailable = true;
+                    anyhow::bail!("Initialisation audio impossible : {error}")
+                }
+            }
+        }
+        let source = Decoder::try_from(std::fs::File::open(path)?)?;
+        let player = Player::connect_new(self.sink.as_ref().unwrap().mixer());
+        player.set_volume(volume.clamp(0.0, 1.0));
+        player.append(source);
+        self.previews.insert(key, player);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1206,6 +1427,28 @@ impl Default for EditorSettings {
 }
 
 impl EditorApp {
+    fn undo(&mut self) {
+        let moves = self.state.undo();
+        self.apply_history_asset_moves(moves);
+    }
+
+    fn redo(&mut self) {
+        let moves = self.state.redo();
+        self.apply_history_asset_moves(moves);
+    }
+
+    fn apply_history_asset_moves(&mut self, moves: Vec<(std::path::PathBuf, std::path::PathBuf)>) {
+        for (old, new) in moves {
+            if let Err(error) = self.rename_project_path(&old, &new) {
+                self.state.push_log(
+                    log::Level::Error,
+                    format!("Déplacement d'asset dans l'historique : {error}"),
+                );
+                break;
+            }
+        }
+    }
+
     pub fn new() -> Self {
         Self::build(true)
     }
@@ -1258,6 +1501,7 @@ impl EditorApp {
             player_mode: false,
             export_receiver: None,
             export_status: None,
+            audio_output: FootstepAudio::default(),
         };
         if let Some(path) = default_project {
             let path = std::path::PathBuf::from(path);
@@ -1297,6 +1541,7 @@ impl EditorApp {
         }
         if !self.state.game_loop.is_editor() {
             self.state.stop();
+            self.audio_output.stop_all();
         }
         if !self.editor_settings.confirm_before_exit {
             return true;
@@ -1322,6 +1567,7 @@ impl EditorApp {
         if self.player_mode {
             self.state.stop();
         }
+        self.audio_output.stop_all();
     }
 
     /// Appelé à chaque frame par la boucle winit.
@@ -1336,8 +1582,33 @@ impl EditorApp {
             };
         }
         let scene_before_update = self.state.project.world.active_scene_index;
+        let mode_before_update = self.state.game_loop.mode;
         // Met à jour la simulation si en cours.
         self.state.update(delta_time);
+        if mode_before_update != EngineMode::Editor
+            && self.state.game_loop.mode == EngineMode::Editor
+        {
+            self.audio_output.stop_all();
+        }
+        for (sound, volume) in std::mem::take(&mut self.state.pending_footstep_sounds) {
+            let stored = std::path::Path::new(&sound);
+            let path = if stored.is_absolute() {
+                stored.to_owned()
+            } else if let Some(project_file) = self.project_path.as_deref() {
+                project_file
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join(stored)
+            } else {
+                std::path::PathBuf::from(&sound)
+            };
+            if let Err(error) = self.audio_output.play(&path, volume) {
+                self.state.push_log(
+                    log::Level::Warn,
+                    format!("Son de pas `{}` : {error}", path.display()),
+                );
+            }
+        }
         if scene_before_update != self.state.project.world.active_scene_index {
             self.runtime_camera = self.state.active_scene().main_camera;
             self.runtime_camera_position = None;
@@ -1532,9 +1803,9 @@ impl EditorApp {
             });
             if let Some(redo) = history_shortcut {
                 if redo {
-                    self.state.redo();
+                    self.redo();
                 } else {
-                    self.state.undo();
+                    self.undo();
                 }
                 history_action = true;
             }
@@ -1596,11 +1867,11 @@ impl EditorApp {
                 export_in_progress,
             );
             if self.toolbar.undo_requested && self.state.game_loop.mode == EngineMode::Editor {
-                self.state.undo();
+                self.undo();
                 history_action = true;
             } else if self.toolbar.redo_requested && self.state.game_loop.mode == EngineMode::Editor
             {
-                self.state.redo();
+                self.redo();
                 history_action = true;
             }
             if self.state.game_loop.mode == EngineMode::Editor {
@@ -1640,6 +1911,7 @@ impl EditorApp {
                 match mode_after {
                     EngineMode::Playing => {
                         if mode_before == EngineMode::Editor {
+                            self.audio_output.stop_previews();
                             match self.load_world_script() {
                                 Ok(()) => {
                                     let _ = self.load_object_scripts();
@@ -1666,6 +1938,7 @@ impl EditorApp {
                     EngineMode::Paused => { /* déjà appliqué */ }
                     EngineMode::Editor => {
                         self.state.stop();
+                        self.audio_output.stop_all();
                         self.runtime_camera = None;
                         self.runtime_camera_position = None;
                         self.runtime_camera_zoom = None;
@@ -2020,7 +2293,9 @@ impl EditorApp {
                     ui.toggle_value(&mut self.show_fps_overlay, "FPS")
                         .on_hover_text("Afficher ou masquer le compteur FPS pendant la lecture");
                     ui.toggle_value(&mut self.show_camera_selector, "Vue caméra")
-                        .on_hover_text("Afficher ou masquer le sélecteur caméra / vue libre en lecture");
+                        .on_hover_text(
+                            "Afficher ou masquer le sélecteur caméra / vue libre en lecture",
+                        );
                     ui.toggle_value(&mut self.show_log, "📋 Log");
                 });
             });
@@ -2150,6 +2425,8 @@ impl EditorApp {
             .map(|scene| scene.meta.name.clone())
             .collect();
         let mut tile_texture_picker = None;
+        let mut tile_footstep_picker = None;
+        let mut import_media_requested = false;
         let mut object_type_texture_picker = None;
         let mut object_type_script_picker = None;
         egui::SidePanel::left("left_panel")
@@ -2175,6 +2452,7 @@ impl EditorApp {
                         self.scene_view.selected_tiles.clear();
                     }
                     match action {
+                        PanelAction::ImportMedia => import_media_requested = true,
                         PanelAction::OpenFile(path) => {
                             if let Err(error) = open_file_with_default_app(&path) {
                                 self.state.push_log(
@@ -2205,6 +2483,25 @@ impl EditorApp {
                                     .push_log(log::Level::Error, format!("Renommage : {error}"));
                             }
                         }
+                        PanelAction::MovePaths(moves) => {
+                            let before = self.state.active_scene().to_json().ok();
+                            match self.move_project_paths(&moves) {
+                                Ok(()) => {
+                                    if let Some(before) = before {
+                                        self.state.record_undo(before, moves.clone());
+                                        history_action = true;
+                                    }
+                                    self.state.push_log(
+                                        log::Level::Info,
+                                        format!("{} élément(s) déplacé(s)", moves.len()),
+                                    );
+                                }
+                                Err(error) => self.state.push_log(
+                                    log::Level::Error,
+                                    format!("Déplacement d'assets : {error}"),
+                                ),
+                            }
+                        }
                         PanelAction::DeletePath(path) => match self.delete_project_path(&path) {
                             Ok(()) => self.state.push_log(
                                 log::Level::Info,
@@ -2216,10 +2513,6 @@ impl EditorApp {
                         },
                         PanelAction::DeleteObject(id) => {
                             self.pending_deletion = Some((vec![id], Vec::new()));
-                        }
-                        PanelAction::ChooseTileTexture(id) => tile_texture_picker = Some(id),
-                        PanelAction::DeleteTileDefinition(id) if id > 6 => {
-                            self.pending_tile_definition_deletion = Some(id);
                         }
                         PanelAction::AddObject => {
                             let position = self
@@ -2336,37 +2629,36 @@ impl EditorApp {
                 });
             });
 
-        if let Some(tile_id) = tile_texture_picker {
-            match choose_tile_texture_file() {
-                Ok(Some(path)) => match self.import_texture(&path) {
+        if import_media_requested {
+            match choose_project_media_file() {
+                Ok(Some(path)) => match self.import_project_media(&path) {
                     Ok(stored_path) => {
-                        if let Some(tile) = self
-                            .state
-                            .project
-                            .tile_definitions
-                            .iter_mut()
-                            .find(|tile| tile.id == tile_id)
-                        {
-                            tile.texture = Some(stored_path);
-                        }
+                        self.left_panel.refresh_file_browser();
+                        self.state.push_log(
+                            log::Level::Info,
+                            format!("Média importé dans le projet : {stored_path}"),
+                        );
                     }
-                    Err(error) => self.state.push_log(
-                        log::Level::Error,
-                        format!("Import de texture de tuile : {error}"),
-                    ),
+                    Err(error) => self
+                        .state
+                        .push_log(log::Level::Error, format!("Import du média : {error}")),
                 },
                 Ok(None) => {}
                 Err(error) => self
                     .state
-                    .push_log(log::Level::Error, format!("Sélecteur de texture : {error}")),
+                    .push_log(log::Level::Error, format!("Sélecteur de média : {error}")),
             }
         }
 
-        // ── Inspecteur à droite ───────────────────────────────────────────────
         let mut texture_picker_object = None;
         let mut script_picker_object = None;
         let mut script_create_object = None;
         let mut type_definition_edit = None;
+        let mut tile_delete_requested = None;
+        let selected_tile_type = self.left_panel.selected_tile_type;
+        let show_tile_inspector = self.left_panel.tab == LeftPanelTab::Tiles;
+        let playing_tile_sound_previews = self.audio_output.preview_keys();
+        let mut tile_sound_preview_action = None;
         egui::SidePanel::right("inspector_panel")
             .resizable(true)
             .default_width(240.0)
@@ -2381,7 +2673,35 @@ impl EditorApp {
                             let mut request_texture_picker = false;
                             let mut request_script_picker = false;
                             let mut request_script_create = false;
-                            if let Some(type_id) = self.left_panel.selected_object_type_id() {
+                            if show_tile_inspector {
+                                let mut request_tile_texture = false;
+                                let mut request_tile_footstep = false;
+                                if let Some(tile) = self
+                                    .state
+                                    .project
+                                    .tile_definitions
+                                    .iter_mut()
+                                    .find(|tile| tile.id == selected_tile_type)
+                                {
+                                    if Inspector::show_tile_definition(
+                                        ui,
+                                        tile,
+                                        &mut request_tile_texture,
+                                        &mut request_tile_footstep,
+                                        &playing_tile_sound_previews,
+                                        &mut tile_sound_preview_action,
+                                    ) {
+                                        tile_delete_requested = Some(tile.id);
+                                    }
+                                    if request_tile_texture {
+                                        tile_texture_picker = Some(tile.id);
+                                    }
+                                    if request_tile_footstep {
+                                        tile_footstep_picker = Some(tile.id);
+                                    }
+                                }
+                            } else if let Some(type_id) = self.left_panel.selected_object_type_id()
+                            {
                                 let edit = Inspector::show_type_definition(
                                     ui,
                                     type_id,
@@ -2427,6 +2747,36 @@ impl EditorApp {
                 });
             });
 
+        if let Some(tile_id) = tile_delete_requested {
+            self.pending_tile_definition_deletion = Some(tile_id);
+        }
+        if let Some(action) = tile_sound_preview_action {
+            if action.stop {
+                self.audio_output.stop_preview(&action.key);
+            } else {
+                let stored = std::path::Path::new(&action.path);
+                let path = if stored.is_absolute() {
+                    stored.to_owned()
+                } else if let Some(project_file) = self.project_path.as_deref() {
+                    project_file
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .join(stored)
+                } else {
+                    std::path::PathBuf::from(&action.path)
+                };
+                if let Err(error) = self
+                    .audio_output
+                    .play_preview(action.key, &path, action.volume)
+                {
+                    self.state.push_log(
+                        log::Level::Warn,
+                        format!("Aperçu du son `{}` : {error}", path.display()),
+                    );
+                }
+            }
+        }
+
         if let Some(edit) = type_definition_edit {
             if let Some((type_id, old_key, new_key)) = edit.renamed_property {
                 for scene in &mut self.state.project.world.scenes {
@@ -2445,6 +2795,66 @@ impl EditorApp {
                     &self.state.project.object_types,
                     &scene_names,
                 );
+            }
+        }
+
+        if let Some(tile_id) = tile_texture_picker {
+            match choose_tile_texture_file() {
+                Ok(Some(path)) => match self.import_texture(&path) {
+                    Ok(stored_path) => {
+                        if let Some(tile) = self
+                            .state
+                            .project
+                            .tile_definitions
+                            .iter_mut()
+                            .find(|tile| tile.id == tile_id)
+                        {
+                            tile.texture = Some(stored_path);
+                        }
+                    }
+                    Err(error) => self.state.push_log(
+                        log::Level::Error,
+                        format!("Import de texture de tuile : {error}"),
+                    ),
+                },
+                Ok(None) => {}
+                Err(error) => self
+                    .state
+                    .push_log(log::Level::Error, format!("Sélecteur de texture : {error}")),
+            }
+        }
+
+        if let Some(tile_id) = tile_footstep_picker {
+            match choose_tile_footstep_sound_file() {
+                Ok(Some(path)) => match self.import_tile_footstep_sound(&path) {
+                    Ok(stored_path) => {
+                        if let Some(tile) = self
+                            .state
+                            .project
+                            .tile_definitions
+                            .iter_mut()
+                            .find(|tile| tile.id == tile_id)
+                        {
+                            if tile.footstep_sound.is_none() {
+                                tile.footstep_sound = Some(stored_path);
+                            } else if !tile.footstep_variants.contains(&stored_path) {
+                                tile.footstep_variant_volumes
+                                    .truncate(tile.footstep_variants.len());
+                                tile.footstep_variant_volumes
+                                    .resize(tile.footstep_variants.len(), tile.footstep_volume);
+                                tile.footstep_variants.push(stored_path);
+                                tile.footstep_variant_volumes.push(tile.footstep_volume);
+                            }
+                        }
+                    }
+                    Err(error) => self
+                        .state
+                        .push_log(log::Level::Error, format!("Import du son de pas : {error}")),
+                },
+                Ok(None) => {}
+                Err(error) => self
+                    .state
+                    .push_log(log::Level::Error, format!("Sélecteur de son : {error}")),
             }
         }
 
@@ -3011,7 +3421,7 @@ impl EditorApp {
                 (scene_before_ui, self.state.active_scene().to_json())
             {
                 if before != after {
-                    self.state.record_undo(before);
+                    self.state.record_undo(before, Vec::new());
                 }
             }
         }
@@ -3038,8 +3448,15 @@ impl EditorApp {
             .unwrap_or(std::env::current_dir()?);
         let source_root = source_root.canonicalize()?;
         let target_asset_dir = project_asset_directory(&path)?;
-        std::fs::create_dir_all(&target_asset_dir)?;
+        let target_image_dir = target_asset_dir.join("images");
+        let target_audio_dir = target_asset_dir.join("audio");
+        let target_video_dir = target_asset_dir.join("videos");
+        std::fs::create_dir_all(&target_image_dir)?;
+        std::fs::create_dir_all(&target_audio_dir)?;
+        std::fs::create_dir_all(&target_video_dir)?;
         let target_asset_dir = target_asset_dir.canonicalize()?;
+        let target_image_dir = target_image_dir.canonicalize()?;
+        let target_audio_dir = target_audio_dir.canonicalize()?;
         let target_root = project_root.canonicalize()?;
 
         let texture_references: Vec<(usize, ObjectId, String)> = self
@@ -3068,6 +3485,8 @@ impl EditorApp {
             .collect();
 
         let asset_prefix = target_asset_dir.strip_prefix(&target_root)?;
+        let image_prefix = asset_prefix.join("images");
+        let audio_prefix = asset_prefix.join("audio");
         let mut copied_sources = std::collections::HashMap::<std::path::PathBuf, String>::new();
         let mut texture_updates = Vec::new();
         for (scene_index, object_id, stored_path) in texture_references {
@@ -3090,14 +3509,14 @@ impl EditorApp {
 
             let relative = if let Some(relative) = copied_sources.get(&source) {
                 relative.clone()
-            } else if let Ok(within_assets) = source.strip_prefix(&target_asset_dir) {
-                let relative = asset_prefix.join(within_assets);
+            } else if let Ok(within_assets) = source.strip_prefix(&target_image_dir) {
+                let relative = image_prefix.join(within_assets);
                 let relative = relative.to_string_lossy().replace('\\', "/");
                 copied_sources.insert(source, relative.clone());
                 relative
             } else {
-                let destination = copy_asset_to_directory(&source, &target_asset_dir)?;
-                let relative = asset_prefix.join(destination.file_name().unwrap_or_default());
+                let destination = copy_asset_to_directory(&source, &target_image_dir)?;
+                let relative = image_prefix.join(destination.file_name().unwrap_or_default());
                 let relative = relative.to_string_lossy().replace('\\', "/");
                 copied_sources.insert(source, relative.clone());
                 relative
@@ -3149,16 +3568,16 @@ impl EditorApp {
             };
             let relative = if let Some(relative) = copied_sources.get(&source) {
                 relative.clone()
-            } else if let Ok(within_assets) = source.strip_prefix(&target_asset_dir) {
-                let relative = asset_prefix
+            } else if let Ok(within_assets) = source.strip_prefix(&target_image_dir) {
+                let relative = image_prefix
                     .join(within_assets)
                     .to_string_lossy()
                     .replace('\\', "/");
                 copied_sources.insert(source, relative.clone());
                 relative
             } else {
-                let destination = copy_asset_to_directory(&source, &target_asset_dir)?;
-                let relative = asset_prefix
+                let destination = copy_asset_to_directory(&source, &target_image_dir)?;
+                let relative = image_prefix
                     .join(destination.file_name().unwrap_or_default())
                     .to_string_lossy()
                     .replace('\\', "/");
@@ -3176,6 +3595,75 @@ impl EditorApp {
                 .find(|tile| tile.id == tile_id)
             {
                 tile.texture = Some(relative);
+            }
+        }
+
+        let tile_sound_references: Vec<(u16, usize, String)> = self
+            .state
+            .project
+            .tile_definitions
+            .iter()
+            .flat_map(|tile| {
+                std::iter::once(tile.footstep_sound.as_ref())
+                    .chain(tile.footstep_variants.iter().map(Some))
+                    .enumerate()
+                    .filter_map(move |(index, path)| {
+                        path.filter(|path| !path.trim().is_empty())
+                            .map(|path| (tile.id, index, path.clone()))
+                    })
+            })
+            .collect();
+        let mut tile_sound_updates = Vec::new();
+        for (tile_id, slot, stored_path) in tile_sound_references {
+            let stored = std::path::Path::new(&stored_path);
+            let source_path = if stored.is_absolute() {
+                stored.to_owned()
+            } else {
+                source_root.join(stored)
+            };
+            let source = match source_path.canonicalize() {
+                Ok(source) => source,
+                Err(error) => {
+                    self.state.push_log(
+                        log::Level::Warn,
+                        format!("Son de pas manquant `{stored_path}` : {error}"),
+                    );
+                    continue;
+                }
+            };
+            let relative = if let Some(relative) = copied_sources.get(&source) {
+                relative.clone()
+            } else if let Ok(within_assets) = source.strip_prefix(&target_audio_dir) {
+                let relative = audio_prefix
+                    .join(within_assets)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                copied_sources.insert(source, relative.clone());
+                relative
+            } else {
+                let destination = copy_asset_to_directory(&source, &target_audio_dir)?;
+                let relative = audio_prefix
+                    .join(destination.file_name().unwrap_or_default())
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                copied_sources.insert(source, relative.clone());
+                relative
+            };
+            tile_sound_updates.push((tile_id, slot, relative));
+        }
+        for (tile_id, slot, relative) in tile_sound_updates {
+            if let Some(tile) = self
+                .state
+                .project
+                .tile_definitions
+                .iter_mut()
+                .find(|tile| tile.id == tile_id)
+            {
+                if slot == 0 {
+                    tile.footstep_sound = Some(relative);
+                } else if let Some(variant) = tile.footstep_variants.get_mut(slot - 1) {
+                    *variant = relative;
+                }
             }
         }
 
@@ -3456,6 +3944,28 @@ impl EditorApp {
         Ok(())
     }
 
+    fn move_project_paths(
+        &mut self,
+        moves: &[(std::path::PathBuf, std::path::PathBuf)],
+    ) -> anyhow::Result<()> {
+        let mut completed: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+        for (old, new) in moves {
+            if let Err(error) = self.rename_project_path(old, new) {
+                for (moved_old, moved_new) in completed.into_iter().rev() {
+                    if let Err(rollback_error) = self.rename_project_path(&moved_new, &moved_old) {
+                        self.state.push_log(
+                            log::Level::Error,
+                            format!("Annulation partielle du déplacement : {rollback_error}"),
+                        );
+                    }
+                }
+                return Err(error);
+            }
+            completed.push((old.clone(), new.clone()));
+        }
+        Ok(())
+    }
+
     fn rename_project_path(
         &mut self,
         old: &std::path::Path,
@@ -3471,10 +3981,13 @@ impl EditorApp {
         let old = resolve_project_browser_path(self.project_path.as_deref(), old)?;
         let new = resolve_project_browser_path(self.project_path.as_deref(), new)?;
         anyhow::ensure!(old != root, "Impossible de renommer la racine du projet");
-        anyhow::ensure!(
-            new.parent() == old.parent(),
-            "Le renommage doit rester dans le dossier d'origine"
-        );
+        anyhow::ensure!(old != new, "L'élément est déjà à cet emplacement");
+        if old.is_dir() {
+            anyhow::ensure!(
+                !new.starts_with(&old),
+                "Impossible de déplacer un dossier à l'intérieur de lui-même"
+            );
+        }
         anyhow::ensure!(!new.exists(), "Un élément portant ce nom existe déjà");
 
         let mut texture_updates = Vec::new();
@@ -3509,6 +4022,25 @@ impl EditorApp {
             .script
             .as_deref()
             .and_then(|path| remap_project_reference(path, &root, &old, &new));
+        let object_type_updates: Vec<(uuid::Uuid, Option<String>, Option<String>)> = self
+            .state
+            .project
+            .object_types
+            .iter()
+            .filter_map(|definition| {
+                let texture = definition
+                    .defaults
+                    .texture
+                    .as_deref()
+                    .and_then(|path| remap_project_reference(path, &root, &old, &new));
+                let script = definition
+                    .defaults
+                    .script
+                    .as_deref()
+                    .and_then(|path| remap_project_reference(path, &root, &old, &new));
+                (texture.is_some() || script.is_some()).then_some((definition.id, texture, script))
+            })
+            .collect();
         let tile_texture_updates: Vec<(u16, String)> = self
             .state
             .project
@@ -3519,6 +4051,30 @@ impl EditorApp {
                     .as_deref()
                     .and_then(|path| remap_project_reference(path, &root, &old, &new))
                     .map(|path| (tile.id, path))
+            })
+            .collect();
+        let root_ref = &root;
+        let old_ref = &old;
+        let new_ref = &new;
+        let tile_sound_updates: Vec<(u16, usize, String)> = self
+            .state
+            .project
+            .tile_definitions
+            .iter()
+            .flat_map(|tile| {
+                std::iter::once(tile.footstep_sound.as_deref())
+                    .chain(
+                        tile.footstep_variants
+                            .iter()
+                            .map(|path| Some(path.as_str())),
+                    )
+                    .enumerate()
+                    .filter_map(move |(index, path)| {
+                        path.and_then(|path| {
+                            remap_project_reference(path, root_ref, old_ref, new_ref)
+                        })
+                        .map(|path| (tile.id, index, path))
+                    })
             })
             .collect();
 
@@ -3547,6 +4103,22 @@ impl EditorApp {
         if let Some(script) = world_script {
             self.state.project.world.script = Some(script);
         }
+        for (type_id, texture, script) in object_type_updates {
+            if let Some(definition) = self
+                .state
+                .project
+                .object_types
+                .iter_mut()
+                .find(|definition| definition.id == type_id)
+            {
+                if let Some(texture) = texture {
+                    definition.defaults.texture = Some(texture);
+                }
+                if let Some(script) = script {
+                    definition.defaults.script = Some(script);
+                }
+            }
+        }
         for (tile_id, texture) in tile_texture_updates {
             if let Some(tile) = self
                 .state
@@ -3556,6 +4128,21 @@ impl EditorApp {
                 .find(|tile| tile.id == tile_id)
             {
                 tile.texture = Some(texture);
+            }
+        }
+        for (tile_id, slot, sound) in tile_sound_updates {
+            if let Some(tile) = self
+                .state
+                .project
+                .tile_definitions
+                .iter_mut()
+                .find(|tile| tile.id == tile_id)
+            {
+                if slot == 0 {
+                    tile.footstep_sound = Some(sound);
+                } else if let Some(variant) = tile.footstep_variants.get_mut(slot - 1) {
+                    *variant = sound;
+                }
             }
         }
         self.left_panel.refresh_file_browser();
@@ -3636,6 +4223,22 @@ impl EditorApp {
             if tile.texture.as_deref().is_some_and(referenced) {
                 tile.texture = None;
             }
+            if tile.footstep_sound.as_deref().is_some_and(referenced) {
+                tile.footstep_sound = None;
+            }
+            let old_variants = std::mem::take(&mut tile.footstep_variants);
+            let old_volumes = std::mem::take(&mut tile.footstep_variant_volumes);
+            for (index, path) in old_variants.into_iter().enumerate() {
+                if !referenced(&path) {
+                    tile.footstep_variants.push(path);
+                    tile.footstep_variant_volumes.push(
+                        old_volumes
+                            .get(index)
+                            .copied()
+                            .unwrap_or(tile.footstep_volume),
+                    );
+                }
+            }
         }
 
         if target.is_dir() {
@@ -3661,27 +4264,75 @@ impl EditorApp {
         }
         let source = selected.canonicalize()?;
         assets::loader::load_image(&source)?;
+        self.import_asset_into_category(&source, "images")
+    }
+
+    fn import_tile_footstep_sound(&self, selected: &std::path::Path) -> anyhow::Result<String> {
+        let extension = selected
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !matches!(extension.as_str(), "wav" | "mp3" | "ogg") {
+            anyhow::bail!("Formats audio acceptés : WAV, MP3 et OGG");
+        }
+        let source = selected.canonicalize()?;
+        self.import_asset_into_category(&source, "audio")
+    }
+
+    fn import_asset_into_category(
+        &self,
+        selected: &std::path::Path,
+        category: &str,
+    ) -> anyhow::Result<String> {
+        let source = selected.canonicalize()?;
         let Some(project_file) = &self.project_path else {
-            // Keep the source until the first Save As chooses the isolated
-            // project directory; save_scene then copies it into that project.
+            // Save As copies this source into the matching media folder.
             return Ok(source.to_string_lossy().into_owned());
         };
-
         let asset_dir = project_asset_directory(project_file)?;
-        std::fs::create_dir_all(&asset_dir)?;
-        let asset_dir = asset_dir.canonicalize()?;
-        if let Ok(within_assets) = source.strip_prefix(&asset_dir) {
-            let relative = project_asset_prefix(project_file)?.join(within_assets);
-            return Ok(relative.to_string_lossy().replace('\\', "/"));
-        }
-
-        let destination = copy_asset_to_directory(&source, &asset_dir)?;
-        let relative = project_asset_prefix(project_file)?.join(
-            destination
-                .file_name()
-                .ok_or_else(|| anyhow::anyhow!("Nom de fichier invalide"))?,
-        );
+        let category_dir = asset_dir.join(category);
+        std::fs::create_dir_all(&category_dir)?;
+        let category_dir = category_dir.canonicalize()?;
+        let prefix = project_asset_prefix(project_file)?.join(category);
+        let relative = if let Ok(within_category) = source.strip_prefix(&category_dir) {
+            prefix.join(within_category)
+        } else {
+            let destination = copy_asset_to_directory(&source, &category_dir)?;
+            prefix.join(
+                destination
+                    .file_name()
+                    .ok_or_else(|| anyhow::anyhow!("Nom de fichier invalide"))?,
+            )
+        };
         Ok(relative.to_string_lossy().replace('\\', "/"))
+    }
+
+    fn import_project_media(&self, selected: &std::path::Path) -> anyhow::Result<String> {
+        let extension = selected
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let category = if matches!(
+            extension.as_str(),
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+        ) {
+            "images"
+        } else if matches!(
+            extension.as_str(),
+            "wav" | "mp3" | "ogg" | "flac" | "aac" | "m4a" | "wma" | "opus"
+        ) {
+            "audio"
+        } else if matches!(
+            extension.as_str(),
+            "mp4" | "mov" | "avi" | "mkv" | "webm" | "m4v" | "mpg" | "mpeg"
+        ) {
+            "videos"
+        } else {
+            anyhow::bail!("Formats acceptés : images, sons et vidéos courants");
+        };
+        self.import_asset_into_category(selected, category)
     }
 
     fn import_script(&self, selected: &std::path::Path) -> anyhow::Result<String> {
@@ -4475,6 +5126,96 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 #[cfg(not(target_os = "windows"))]
 fn choose_tile_texture_file() -> anyhow::Result<Option<std::path::PathBuf>> {
     anyhow::bail!("Le sélecteur natif de textures est uniquement disponible sous Windows")
+}
+
+#[cfg(target_os = "windows")]
+fn choose_project_media_file() -> anyhow::Result<Option<std::path::PathBuf>> {
+    let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Importer un média dans le projet'
+$dialog.Filter = 'Médias pris en charge (*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.wav;*.mp3;*.ogg;*.flac;*.aac;*.m4a;*.mp4;*.mov;*.avi;*.mkv;*.webm)|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.bmp;*.wav;*.mp3;*.ogg;*.flac;*.aac;*.m4a;*.mp4;*.mov;*.avi;*.mkv;*.webm|Tous les fichiers (*.*)|*.*'
+$dialog.Multiselect = $false
+$dialog.CheckFileExists = $true
+$dialog.RestoreDirectory = $true
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    [Console]::Out.Write($dialog.FileName)
+}
+"#;
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            script,
+        ])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Le sélecteur de média Windows a échoué : {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let selected = String::from_utf8(output.stdout)?;
+    let selected = selected.trim();
+    if selected.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(std::path::PathBuf::from(selected)))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn choose_project_media_file() -> anyhow::Result<Option<std::path::PathBuf>> {
+    anyhow::bail!("Le sélecteur natif de fichiers est uniquement disponible sous Windows")
+}
+
+#[cfg(target_os = "windows")]
+fn choose_tile_footstep_sound_file() -> anyhow::Result<Option<std::path::PathBuf>> {
+    let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = 'Choisir un son de pas'
+$dialog.Filter = 'Fichiers audio (*.wav;*.mp3;*.ogg)|*.wav;*.mp3;*.ogg'
+$dialog.Multiselect = $false
+$dialog.CheckFileExists = $true
+$dialog.RestoreDirectory = $true
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    [Console]::Out.Write($dialog.FileName)
+}
+"#;
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-STA",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            script,
+        ])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "Le sélecteur audio Windows a échoué : {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let selected = String::from_utf8(output.stdout)?;
+    let selected = selected.trim();
+    if selected.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(std::path::PathBuf::from(selected)))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn choose_tile_footstep_sound_file() -> anyhow::Result<Option<std::path::PathBuf>> {
+    anyhow::bail!("Le sÃ©lecteur natif de fichiers est uniquement disponible sous Windows")
 }
 
 #[cfg(not(target_os = "windows"))]

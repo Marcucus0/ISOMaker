@@ -24,6 +24,9 @@ egui-winit = "0.29"
 # Images
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
+# Audio (lecture uniquement, formats courants)
+rodio = { version = "0.22", default-features = false, features = ["playback", "wav", "mp3", "vorbis"] }
+
 # Sérialisation
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

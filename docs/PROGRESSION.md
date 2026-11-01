@@ -34,9 +34,23 @@ complet prêt au déploiement.
 - **Fichiers du projet** : le panneau Assets sert de mini gestionnaire enraciné
   dans le dossier `<nom_du_projet>/` associé au fichier `.isomaker`. Il permet
   de naviguer dans les dossiers, d'ouvrir les fichiers avec l'application
-  Windows associée, de créer des fichiers/dossiers et de renommer les éléments.
-  Les renommages actualisent les références aux textures et scripts dans le
-  projet, puis le sauvegardent.
+  Windows associée, de créer des fichiers/dossiers, d'importer des médias et
+  de renommer ou déplacer les éléments. Les imports sont classés dans
+  `assets/images/`, `assets/audio/` ou `assets/videos/` selon leur extension.
+  Hors de la racine, une entrée `..` en tête de liste remonte au dossier parent
+  et accepte le dépôt d'un fichier pour le déplacer à ce niveau.
+  La zone de glisser-déposer de chaque élément couvre une ligne de largeur
+  constante autour du nom, avec un contour au survol.
+  Dans la liste, un clic sélectionne un fichier et Maj+clic étend la sélection
+  à tous les fichiers entre l'ancre et le fichier cliqué, dossiers exclus. Un
+  glisser-déposer depuis un fichier sélectionné déplace la sélection entière ;
+  ces déplacements peuvent être annulés avec Ctrl+Z et rétablis avec Ctrl+Y.
+  Le premier enregistrement range aussi les textures et sons déjà référencés
+  dans les dossiers dédiés. Les fichiers peuvent être déplacés par glisser-
+  déposer ; textures, sons et scripts référencés par les objets, types d'objets
+  et tuiles sont mis à jour et le projet est sauvegardé. Des icônes distinctes
+  identifient les dossiers, images (dont les GIF), fichiers audio, vidéos,
+  scripts Python, fichiers JSON et autres fichiers.
 - **Fermeture** : compare le projet à son dernier enregistrement depuis la
   croix de la fenêtre ou **Fichier → Quitter**. En cas de changements, propose
   Sauvegarder et quitter, Quitter sans sauvegarder ou Annuler. La confirmation
@@ -56,8 +70,9 @@ complet prêt au déploiement.
   historiques et peut ajouter ses propres tuiles. Leur nom, couleur, texture
   PNG/JPEG ou GIF animé, collision, rotation pseudo-aléatoire de la texture
   et option « Visible dans l'éditeur uniquement » (masquée en Lecture)
-  sont enregistrés dans le projet et dans ses fichiers `tiles/`; les textures
-  sont importées dans les assets propres au projet. Une tuile personnalisée
+  sont édités dans l'inspecteur après sélection dans la palette **Tuiles** et
+  enregistrés dans le projet et dans ses fichiers `tiles/`; les textures sont
+  importées dans les assets propres au projet. Une tuile personnalisée
   peut être supprimée après confirmation ; ses cases sont effacées dans toutes
   les scènes et son fichier de définition est retiré lors de la sauvegarde.
 - **Copier/coller** : avec l'outil Sélection, `Ctrl+C` copie les objets
@@ -124,6 +139,14 @@ complet prêt au déploiement.
   bloqués par les tuiles et objets solides à la même élévation lorsque le mobile
   et l'obstacle ont tous deux les collisions activées. Le calcul utilise les
   empreintes rectangulaires ; formes libres et poussée restent à faire.
+- **Sons de pas par tuile** : chaque définition de tuile, standard ou
+  personnalisée, peut associer un son principal et plusieurs variantes WAV,
+  MP3 ou OGG. Chaque son a son curseur de volume et ses boutons d'aperçu
+  lecture/arrêt pour écouter ou couper individuellement l'aperçu ; les variantes
+  sont choisies au hasard. Les fichiers sont
+  copiés dans les assets du projet et joués en Lecture après un déplacement
+  réussi d'une case effectué par un script. Les déplacements bloqués restent
+  silencieux.
 - **Zones de détection** : un objet dont le script définit `_on_area_entered`,
   `_on_area_stayed` ou `_on_area_exited` détecte les autres empreintes
   rectangulaires qui le recouvrent au même étage. L'empreinte se règle dans
@@ -197,6 +220,8 @@ complet prêt au déploiement.
 - Le HUD Python peut aussi faire apparaître un texte existant avec
   `game.ui.fade_in(id, durée)` ; `set_text(..., visible=False)` le crée caché
   avant ce fondu.
+- Les textes HUD acceptent un fond RGBA facultatif via `background_color` ; le
+  fond suit les dimensions et les fondus du texte.
 - L'export ne collecte pas encore les dépendances Python tierces utilisées par
   les scripts. Le ZIP doit être vérifié sur une installation Windows propre.
 - L'API Python expose les scènes et objets du projet sous forme d'instantanés en lecture seule. Les entrées souris génériques et les événements hors des zones restent à développer. Le débogage interactif et les permissions de scripts tiers restent à concevoir.

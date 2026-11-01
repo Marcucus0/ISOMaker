@@ -59,6 +59,18 @@ Vérification effectuée pour la release 0.4.0 le 31 octobre 2026 :
 - `cargo test --workspace` dans `target/release-check` : 29 tests réussis.
 - `python -m unittest discover -s python/tests -v` : 5 tests réussis.
 
+Vérification effectuée pour la release 0.6.0 le 1er novembre 2026 :
+
+- Documentation contrôlée : `ARCHITECTURE.md`, `PROGRESSION.md`, `PYTHON_API.md`
+  et `CHANGELOG.md` actualisés.
+- Paramètres et snippets VS Code contrôlés ; les fichiers JSON sont valides.
+- `cargo check --workspace` : réussi sans avertissement.
+- `cargo fmt --check` : réussi. `cargo-machete` n'est pas installé dans
+  l'environnement.
+- `cargo build --release -p editor` dans `target/release-check` : réussi.
+- `cargo test --workspace` dans `target/release-check` : 29 tests réussis.
+- `python -m unittest discover -s python/tests -v` : 5 tests réussis.
+
 Vérification effectuée pour la release 0.5.0 le 31 octobre 2026 :
 
 - Documentation contrôlée et actualisée : `ARCHITECTURE.md`, `PROGRESSION.md`,

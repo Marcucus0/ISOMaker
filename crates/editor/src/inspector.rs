@@ -5,7 +5,9 @@ use crate::panels::{
     show_custom_property_default,
 };
 use egui::{CollapsingHeader, Grid, Ui};
+use std::collections::HashSet;
 use world::{
+    grid::TileDefinition,
     layer::Layer,
     object::{
         CustomObjectTypeDefinition, CustomPropertyDefinition, CustomPropertyKind, ObjectId,
@@ -20,10 +22,216 @@ pub struct TypeDefinitionEdit {
     pub renamed_property: Option<(uuid::Uuid, String, String)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct TileSoundPreviewAction {
+    pub key: String,
+    pub path: String,
+    pub volume: f32,
+    pub stop: bool,
+}
+
 /// Panneau de droite : affiche et édite les propriétés de l'objet sélectionné.
 pub struct Inspector;
 
 impl Inspector {
+    /// Affiche et édite les propriétés du type de tuile choisi dans la palette.
+    pub fn show_tile_definition(
+        ui: &mut Ui,
+        tile: &mut TileDefinition,
+        request_texture_picker: &mut bool,
+        request_footstep_picker: &mut bool,
+        playing_previews: &HashSet<String>,
+        preview_action: &mut Option<TileSoundPreviewAction>,
+    ) -> bool {
+        ui.heading("Inspecteur");
+        ui.separator();
+        ui.label(egui::RichText::new(format!("Tuile : {}", tile.name)).strong());
+
+        CollapsingHeader::new("Identité")
+            .id_salt("tile_inspector_identity")
+            .default_open(true)
+            .show(ui, |ui| {
+                Grid::new("tile_inspector_identity_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label("Nom");
+                        ui.text_edit_singleline(&mut tile.name);
+                        ui.end_row();
+                        ui.label("ID");
+                        ui.label(tile.id.to_string());
+                        ui.end_row();
+                    });
+            });
+
+        CollapsingHeader::new("Apparence")
+            .id_salt("tile_inspector_appearance")
+            .default_open(true)
+            .show(ui, |ui| {
+                let mut color = egui::Color32::from_rgba_unmultiplied(
+                    tile.color[0],
+                    tile.color[1],
+                    tile.color[2],
+                    tile.color[3],
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Couleur");
+                    if ui.color_edit_button_srgba(&mut color).changed() {
+                        tile.color = [color.r(), color.g(), color.b(), color.a()];
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Choisir une texture…").clicked() {
+                        *request_texture_picker = true;
+                    }
+                    if tile.texture.is_some() && ui.small_button("Retirer").clicked() {
+                        tile.texture = None;
+                    }
+                });
+                if let Some(texture) = &tile.texture {
+                    ui.label(egui::RichText::new(texture).small().weak());
+                } else {
+                    ui.label(egui::RichText::new("Aucune texture").small().weak());
+                }
+                ui.checkbox(
+                    &mut tile.randomize_texture_rotation,
+                    "Orientation de texture aléatoire",
+                );
+                if tile.id > 6 {
+                    ui.checkbox(&mut tile.editor_only, "Visible dans l'éditeur uniquement")
+                        .on_hover_text(
+                            "Cette tuile reste visible dans l'éditeur et disparaît en Lecture.",
+                        );
+                }
+            });
+
+        CollapsingHeader::new("Audio")
+            .id_salt("tile_inspector_audio")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Ajouter un son de pas…").clicked() {
+                        *request_footstep_picker = true;
+                    }
+                    if tile.footstep_sound.is_some() && ui.small_button("Retirer").clicked() {
+                        let key = format!("tile:{}:footstep:main", tile.id);
+                        if playing_previews.contains(&key) {
+                            *preview_action = Some(TileSoundPreviewAction {
+                                key,
+                                path: tile.footstep_sound.clone().unwrap_or_default(),
+                                volume: tile.footstep_volume,
+                                stop: true,
+                            });
+                        }
+                        tile.footstep_sound = None;
+                    }
+                });
+                if let Some(sound) = &tile.footstep_sound {
+                    let key = format!("tile:{}:footstep:main", tile.id);
+                    ui.horizontal(|ui| {
+                        let is_playing = playing_previews.contains(&key);
+                        if ui
+                            .small_button(if is_playing { "■" } else { "▶" })
+                            .clicked()
+                        {
+                            *preview_action = Some(TileSoundPreviewAction {
+                                key: key.clone(),
+                                path: sound.clone(),
+                                volume: tile.footstep_volume,
+                                stop: is_playing,
+                            });
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("Principal : {sound}"))
+                                .small()
+                                .weak(),
+                        );
+                    });
+                    ui.add(
+                        egui::Slider::new(&mut tile.footstep_volume, 0.0..=1.0)
+                            .text("Volume principal")
+                            .custom_formatter(|value, _| {
+                                format!("{} %", (value * 100.0).round() as u32)
+                            }),
+                    );
+                } else {
+                    ui.label(egui::RichText::new("Aucun son principal").small().weak());
+                }
+                let mut remove_variant = None;
+                for index in 0..tile.footstep_variants.len() {
+                    let sound = tile.footstep_variants[index].clone();
+                    let key = format!("tile:{}:footstep:variant:{sound}", tile.id);
+                    let is_playing = playing_previews.contains(&key);
+                    let volume = tile
+                        .footstep_variant_volumes
+                        .get(index)
+                        .copied()
+                        .unwrap_or(tile.footstep_volume);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button(if is_playing { "■" } else { "▶" })
+                            .clicked()
+                        {
+                            *preview_action = Some(TileSoundPreviewAction {
+                                key: key.clone(),
+                                path: sound.clone(),
+                                volume,
+                                stop: is_playing,
+                            });
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("Aléatoire : {sound}"))
+                                .small()
+                                .weak(),
+                        );
+                        if ui.small_button("×").clicked() {
+                            remove_variant = Some(index);
+                        }
+                    });
+                    if tile.footstep_variant_volumes.len() <= index {
+                        tile.footstep_variant_volumes
+                            .resize(index + 1, tile.footstep_volume);
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut tile.footstep_variant_volumes[index], 0.0..=1.0)
+                            .text(format!("Volume variante {}", index + 1))
+                            .custom_formatter(|value, _| {
+                                format!("{} %", (value * 100.0).round() as u32)
+                            }),
+                    );
+                }
+                if let Some(index) = remove_variant {
+                    let path = tile.footstep_variants[index].clone();
+                    let key = format!("tile:{}:footstep:variant:{path}", tile.id);
+                    if playing_previews.contains(&key) {
+                        *preview_action = Some(TileSoundPreviewAction {
+                            key,
+                            path,
+                            volume: tile
+                                .footstep_variant_volumes
+                                .get(index)
+                                .copied()
+                                .unwrap_or(tile.footstep_volume),
+                            stop: true,
+                        });
+                    }
+                    tile.footstep_variants.remove(index);
+                    if index < tile.footstep_variant_volumes.len() {
+                        tile.footstep_variant_volumes.remove(index);
+                    }
+                }
+            });
+
+        CollapsingHeader::new("Physique")
+            .id_salt("tile_inspector_physics")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.checkbox(&mut tile.has_collisions, "Collisions activées");
+            });
+
+        tile.id > 6 && ui.button("Supprimer cette tuile…").clicked()
+    }
+
     /// Affiche l'inspecteur.
     ///
     /// Retourne `true` si une propriété a été modifiée.

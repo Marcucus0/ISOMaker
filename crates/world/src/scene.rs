@@ -101,9 +101,7 @@ impl Scene {
 
         let base = requested
             .rsplit_once(" (")
-            .and_then(|(base, suffix)| {
-                suffix.strip_suffix(')')?.parse::<u32>().ok().map(|_| base)
-            })
+            .and_then(|(base, suffix)| suffix.strip_suffix(')')?.parse::<u32>().ok().map(|_| base))
             .unwrap_or(requested);
 
         let mut number = 1_u32;

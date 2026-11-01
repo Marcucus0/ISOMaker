@@ -3,13 +3,13 @@
 use crate::{camera::Camera, toolbar::EditorTool};
 use egui::{Color32, Painter, Rect, Sense, Stroke, Ui, Vec2};
 use image::AnimationDecoder;
+use scripting::command::{HudAnchor, HudText};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
     io::BufReader,
     path::Path,
 };
-use scripting::command::{HudAnchor, HudText};
 use world::{
     coords::{IsoProjection, ScreenPos, TilePos},
     grid::{TileData, TileDefinition},
@@ -408,11 +408,32 @@ impl SceneView {
                     );
                     self.copied_tiles = None;
                 } else if !self.selected_tiles.is_empty() {
-                    let min_x = self.selected_tiles.iter().map(|tile| tile.x).min().unwrap_or(0);
-                    let max_x = self.selected_tiles.iter().map(|tile| tile.x).max().unwrap_or(min_x);
-                    let min_y = self.selected_tiles.iter().map(|tile| tile.y).min().unwrap_or(0);
-                    let max_y = self.selected_tiles.iter().map(|tile| tile.y).max().unwrap_or(min_y);
-                    let mut tiles = Vec::with_capacity(((max_x - min_x + 1) * (max_y - min_y + 1)) as usize);
+                    let min_x = self
+                        .selected_tiles
+                        .iter()
+                        .map(|tile| tile.x)
+                        .min()
+                        .unwrap_or(0);
+                    let max_x = self
+                        .selected_tiles
+                        .iter()
+                        .map(|tile| tile.x)
+                        .max()
+                        .unwrap_or(min_x);
+                    let min_y = self
+                        .selected_tiles
+                        .iter()
+                        .map(|tile| tile.y)
+                        .min()
+                        .unwrap_or(0);
+                    let max_y = self
+                        .selected_tiles
+                        .iter()
+                        .map(|tile| tile.y)
+                        .max()
+                        .unwrap_or(min_y);
+                    let mut tiles =
+                        Vec::with_capacity(((max_x - min_x + 1) * (max_y - min_y + 1)) as usize);
                     for y in min_y..=max_y {
                         for x in min_x..=max_x {
                             tiles.push((x - min_x, y - min_y, scene.get_tile(TilePos::new(x, y))));
@@ -878,24 +899,66 @@ impl SceneView {
                 if !hud.visible {
                     continue;
                 }
-                let anchor_pos = match hud.anchor {
-                    HudAnchor::TopLeft => (egui::pos2(rect.left() + hud.x, rect.top() + hud.y), egui::Align2::LEFT_TOP),
-                    HudAnchor::TopCenter => (egui::pos2(rect.center().x + hud.x, rect.top() + hud.y), egui::Align2::CENTER_TOP),
-                    HudAnchor::TopRight => (egui::pos2(rect.right() + hud.x, rect.top() + hud.y), egui::Align2::RIGHT_TOP),
-                    HudAnchor::CenterLeft => (egui::pos2(rect.left() + hud.x, rect.center().y + hud.y), egui::Align2::LEFT_CENTER),
-                    HudAnchor::Center => (rect.center() + Vec2::new(hud.x, hud.y), egui::Align2::CENTER_CENTER),
-                    HudAnchor::CenterRight => (egui::pos2(rect.right() + hud.x, rect.center().y + hud.y), egui::Align2::RIGHT_CENTER),
-                    HudAnchor::BottomLeft => (egui::pos2(rect.left() + hud.x, rect.bottom() + hud.y), egui::Align2::LEFT_BOTTOM),
-                    HudAnchor::BottomCenter => (egui::pos2(rect.center().x + hud.x, rect.bottom() + hud.y), egui::Align2::CENTER_BOTTOM),
-                    HudAnchor::BottomRight => (egui::pos2(rect.right() + hud.x, rect.bottom() + hud.y), egui::Align2::RIGHT_BOTTOM),
+                let (anchor_pos, _) = match hud.anchor {
+                    HudAnchor::TopLeft => (
+                        egui::pos2(rect.left() + hud.x, rect.top() + hud.y),
+                        egui::Align2::LEFT_TOP,
+                    ),
+                    HudAnchor::TopCenter => (
+                        egui::pos2(rect.center().x + hud.x, rect.top() + hud.y),
+                        egui::Align2::CENTER_TOP,
+                    ),
+                    HudAnchor::TopRight => (
+                        egui::pos2(rect.right() + hud.x, rect.top() + hud.y),
+                        egui::Align2::RIGHT_TOP,
+                    ),
+                    HudAnchor::CenterLeft => (
+                        egui::pos2(rect.left() + hud.x, rect.center().y + hud.y),
+                        egui::Align2::LEFT_CENTER,
+                    ),
+                    HudAnchor::Center => (
+                        rect.center() + Vec2::new(hud.x, hud.y),
+                        egui::Align2::CENTER_CENTER,
+                    ),
+                    HudAnchor::CenterRight => (
+                        egui::pos2(rect.right() + hud.x, rect.center().y + hud.y),
+                        egui::Align2::RIGHT_CENTER,
+                    ),
+                    HudAnchor::BottomLeft => (
+                        egui::pos2(rect.left() + hud.x, rect.bottom() + hud.y),
+                        egui::Align2::LEFT_BOTTOM,
+                    ),
+                    HudAnchor::BottomCenter => (
+                        egui::pos2(rect.center().x + hud.x, rect.bottom() + hud.y),
+                        egui::Align2::CENTER_BOTTOM,
+                    ),
+                    HudAnchor::BottomRight => (
+                        egui::pos2(rect.right() + hud.x, rect.bottom() + hud.y),
+                        egui::Align2::RIGHT_BOTTOM,
+                    ),
                 };
-                hud_painter.text(
-                    anchor_pos.0,
-                    anchor_pos.1,
-                    &hud.text,
-                    egui::FontId::proportional(hud.font_size.clamp(6.0, 128.0)),
-                    Color32::from_rgba_unmultiplied(hud.color[0], hud.color[1], hud.color[2], hud.color[3]),
+                let text_color = Color32::from_rgba_unmultiplied(
+                    hud.color[0],
+                    hud.color[1],
+                    hud.color[2],
+                    hud.color[3],
                 );
+                let font = egui::FontId::proportional(hud.font_size.clamp(6.0, 128.0));
+                let galley = hud_painter.layout_no_wrap(hud.text.clone(), font, text_color);
+                let text_min = hud_text_top_left(hud.anchor, anchor_pos, galley.size());
+                if let Some([r, g, b, a]) = hud.background_color {
+                    let padding = 6.0;
+                    let background_rect = egui::Rect::from_min_size(
+                        text_min - Vec2::splat(padding),
+                        galley.size() + Vec2::splat(padding * 2.0),
+                    );
+                    hud_painter.rect_filled(
+                        background_rect,
+                        4.0,
+                        Color32::from_rgba_unmultiplied(r, g, b, a),
+                    );
+                }
+                hud_painter.galley(text_min, galley, text_color);
             }
         }
 
@@ -1664,6 +1727,28 @@ impl SceneView {
                 contains.then_some(object.id)
             })
     }
+}
+
+fn hud_text_top_left(anchor: HudAnchor, anchor_pos: egui::Pos2, size: Vec2) -> egui::Pos2 {
+    let x = match anchor {
+        HudAnchor::TopLeft | HudAnchor::CenterLeft | HudAnchor::BottomLeft => anchor_pos.x,
+        HudAnchor::TopCenter | HudAnchor::Center | HudAnchor::BottomCenter => {
+            anchor_pos.x - size.x * 0.5
+        }
+        HudAnchor::TopRight | HudAnchor::CenterRight | HudAnchor::BottomRight => {
+            anchor_pos.x - size.x
+        }
+    };
+    let y = match anchor {
+        HudAnchor::TopLeft | HudAnchor::TopCenter | HudAnchor::TopRight => anchor_pos.y,
+        HudAnchor::CenterLeft | HudAnchor::Center | HudAnchor::CenterRight => {
+            anchor_pos.y - size.y * 0.5
+        }
+        HudAnchor::BottomLeft | HudAnchor::BottomCenter | HudAnchor::BottomRight => {
+            anchor_pos.y - size.y
+        }
+    };
+    egui::pos2(x, y)
 }
 
 fn load_animated_tile_texture(

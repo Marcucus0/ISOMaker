@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.0 — 2026-11-01
+
+### Ajouté
+
+- Sons de pas configurables par tuile, avec sons alternatifs choisis au hasard,
+  volume indépendant et aperçu lecture/arrêt pour chaque son.
+- Import et classement automatique des médias dans les dossiers images, audio
+  et vidéos du projet. Le gestionnaire d'assets permet de déplacer un ou
+  plusieurs fichiers par glisser-déposer et met à jour les références ; `Ctrl+Z`
+  annule et `Ctrl+Y` rétablit ces déplacements.
+- Sélection de fichiers dans le gestionnaire d'assets avec clic et Maj+clic,
+  et icônes distinctes pour les fichiers audio et vidéo.
+- Couleur de fond des textes HUD, prise en charge dans les fondus entrants et
+  sortants.
+
+### Vérification
+
+- `cargo check --workspace` : réussi sans avertissement.
+- `cargo test --workspace` : 29 tests réussis.
+- `cargo build --release -p editor` dans `target/release-check` : réussi.
+- `python -m unittest discover -s python/tests -v` : 5 tests réussis.
+- Fichiers JSON de `.vscode` valides.
+
 ## 0.5.0 — 2026-10-31
 
 ### Ajouté

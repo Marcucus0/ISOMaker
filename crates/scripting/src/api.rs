@@ -4,7 +4,10 @@ use crate::command::{GameCommand, HudAnchor, HudText, LogLevel};
 use engine::{InputState, Key};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 use world::object::{PropValue, SceneObject};
 
 /// File de commandes partagée entre le contexte Python et le moteur Rust.
@@ -283,15 +286,60 @@ pub struct PyUIAnchorSet;
 
 #[pymethods]
 impl PyUIAnchorSet {
-    #[getter(TOP_LEFT)] fn top_left(&self) -> PyUIAnchor { PyUIAnchor { anchor: HudAnchor::TopLeft } }
-    #[getter(TOP_CENTER)] fn top_center(&self) -> PyUIAnchor { PyUIAnchor { anchor: HudAnchor::TopCenter } }
-    #[getter(TOP_RIGHT)] fn top_right(&self) -> PyUIAnchor { PyUIAnchor { anchor: HudAnchor::TopRight } }
-    #[getter(CENTER_LEFT)] fn center_left(&self) -> PyUIAnchor { PyUIAnchor { anchor: HudAnchor::CenterLeft } }
-    #[getter(CENTER)] fn center(&self) -> PyUIAnchor { PyUIAnchor { anchor: HudAnchor::Center } }
-    #[getter(CENTER_RIGHT)] fn center_right(&self) -> PyUIAnchor { PyUIAnchor { anchor: HudAnchor::CenterRight } }
-    #[getter(BOTTOM_LEFT)] fn bottom_left(&self) -> PyUIAnchor { PyUIAnchor { anchor: HudAnchor::BottomLeft } }
-    #[getter(BOTTOM_CENTER)] fn bottom_center(&self) -> PyUIAnchor { PyUIAnchor { anchor: HudAnchor::BottomCenter } }
-    #[getter(BOTTOM_RIGHT)] fn bottom_right(&self) -> PyUIAnchor { PyUIAnchor { anchor: HudAnchor::BottomRight } }
+    #[getter(TOP_LEFT)]
+    fn top_left(&self) -> PyUIAnchor {
+        PyUIAnchor {
+            anchor: HudAnchor::TopLeft,
+        }
+    }
+    #[getter(TOP_CENTER)]
+    fn top_center(&self) -> PyUIAnchor {
+        PyUIAnchor {
+            anchor: HudAnchor::TopCenter,
+        }
+    }
+    #[getter(TOP_RIGHT)]
+    fn top_right(&self) -> PyUIAnchor {
+        PyUIAnchor {
+            anchor: HudAnchor::TopRight,
+        }
+    }
+    #[getter(CENTER_LEFT)]
+    fn center_left(&self) -> PyUIAnchor {
+        PyUIAnchor {
+            anchor: HudAnchor::CenterLeft,
+        }
+    }
+    #[getter(CENTER)]
+    fn center(&self) -> PyUIAnchor {
+        PyUIAnchor {
+            anchor: HudAnchor::Center,
+        }
+    }
+    #[getter(CENTER_RIGHT)]
+    fn center_right(&self) -> PyUIAnchor {
+        PyUIAnchor {
+            anchor: HudAnchor::CenterRight,
+        }
+    }
+    #[getter(BOTTOM_LEFT)]
+    fn bottom_left(&self) -> PyUIAnchor {
+        PyUIAnchor {
+            anchor: HudAnchor::BottomLeft,
+        }
+    }
+    #[getter(BOTTOM_CENTER)]
+    fn bottom_center(&self) -> PyUIAnchor {
+        PyUIAnchor {
+            anchor: HudAnchor::BottomCenter,
+        }
+    }
+    #[getter(BOTTOM_RIGHT)]
+    fn bottom_right(&self) -> PyUIAnchor {
+        PyUIAnchor {
+            anchor: HudAnchor::BottomRight,
+        }
+    }
 }
 
 #[pyclass(name = "GameUI")]
@@ -302,7 +350,7 @@ pub struct PyGameUI {
 #[pymethods]
 impl PyGameUI {
     /// Crée ou met à jour un texte identifié dans le HUD.
-    #[pyo3(signature = (id, text, x=0.0, y=0.0, anchor=None, font_size=24.0, color=None, visible=true))]
+    #[pyo3(signature = (id, text, x=0.0, y=0.0, anchor=None, font_size=24.0, color=None, visible=true, background_color=None))]
     fn set_text(
         &self,
         id: &str,
@@ -313,17 +361,27 @@ impl PyGameUI {
         font_size: f32,
         color: Option<(u8, u8, u8, u8)>,
         visible: bool,
+        background_color: Option<(u8, u8, u8, u8)>,
     ) -> PyResult<()> {
         if id.is_empty() {
-            return Err(pyo3::exceptions::PyValueError::new_err("L'identifiant du texte HUD ne peut pas être vide."));
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "L'identifiant du texte HUD ne peut pas être vide.",
+            ));
         }
         if !x.is_finite() || !y.is_finite() || !font_size.is_finite() {
-            return Err(pyo3::exceptions::PyValueError::new_err("La position et la taille du texte doivent être des nombres finis."));
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "La position et la taille du texte doivent être des nombres finis.",
+            ));
         }
-        let anchor = anchor.map(|value| value.anchor).unwrap_or(HudAnchor::TopLeft);
+        let anchor = anchor
+            .map(|value| value.anchor)
+            .unwrap_or(HudAnchor::TopLeft);
         let color = color.unwrap_or((255, 255, 255, 255));
-        self.queue.lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
             .push(GameCommand::SetHudText(HudText {
                 id: id.to_owned(),
                 text: text.to_owned(),
@@ -333,82 +391,137 @@ impl PyGameUI {
                 font_size: font_size.clamp(6.0, 128.0),
                 color: [color.0, color.1, color.2, color.3],
                 visible,
+                background_color: background_color.map(|(r, g, b, a)| [r, g, b, a]),
             }));
         Ok(())
     }
 
     /// Met à jour uniquement le contenu d'un texte HUD existant.
     fn update_text(&self, id: &str, text: &str) -> PyResult<()> {
-        self.queue.lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
-            .push(GameCommand::UpdateHudText { id: id.to_owned(), text: text.to_owned() });
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
+            .push(GameCommand::UpdateHudText {
+                id: id.to_owned(),
+                text: text.to_owned(),
+            });
         Ok(())
     }
 
     /// Met à jour uniquement la position d'un texte HUD existant.
     fn update_position(&self, id: &str, x: f32, y: f32) -> PyResult<()> {
         if !x.is_finite() || !y.is_finite() {
-            return Err(pyo3::exceptions::PyValueError::new_err("La position du texte doit être composée de nombres finis."));
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "La position du texte doit être composée de nombres finis.",
+            ));
         }
-        self.queue.lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
-            .push(GameCommand::UpdateHudPosition { id: id.to_owned(), x, y });
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
+            .push(GameCommand::UpdateHudPosition {
+                id: id.to_owned(),
+                x,
+                y,
+            });
         Ok(())
     }
 
     /// Met à jour uniquement l'ancrage d'un texte HUD existant.
     fn update_anchor(&self, id: &str, anchor: PyRef<'_, PyUIAnchor>) -> PyResult<()> {
-        self.queue.lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
-            .push(GameCommand::UpdateHudAnchor { id: id.to_owned(), anchor: anchor.anchor });
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
+            .push(GameCommand::UpdateHudAnchor {
+                id: id.to_owned(),
+                anchor: anchor.anchor,
+            });
         Ok(())
     }
 
     /// Met à jour uniquement la taille de police d'un texte HUD existant.
     fn update_font_size(&self, id: &str, font_size: f32) -> PyResult<()> {
         if !font_size.is_finite() {
-            return Err(pyo3::exceptions::PyValueError::new_err("La taille du texte doit être un nombre fini."));
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "La taille du texte doit être un nombre fini.",
+            ));
         }
-        self.queue.lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
-            .push(GameCommand::UpdateHudFontSize { id: id.to_owned(), font_size: font_size.clamp(6.0, 128.0) });
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
+            .push(GameCommand::UpdateHudFontSize {
+                id: id.to_owned(),
+                font_size: font_size.clamp(6.0, 128.0),
+            });
         Ok(())
     }
 
     /// Met à jour uniquement la couleur RGBA d'un texte HUD existant.
     fn update_color(&self, id: &str, color: (u8, u8, u8, u8)) -> PyResult<()> {
-        self.queue.lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
-            .push(GameCommand::UpdateHudColor { id: id.to_owned(), color: [color.0, color.1, color.2, color.3] });
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
+            .push(GameCommand::UpdateHudColor {
+                id: id.to_owned(),
+                color: [color.0, color.1, color.2, color.3],
+            });
         Ok(())
     }
 
     /// Fait diminuer progressivement l'opacité d'un texte, puis le supprime.
     fn fade_out(&self, id: &str, duration: f32) -> PyResult<()> {
         if !duration.is_finite() || duration <= 0.0 {
-            return Err(pyo3::exceptions::PyValueError::new_err("La durée du fondu doit être un nombre positif."));
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "La durée du fondu doit être un nombre positif.",
+            ));
         }
-        self.queue.lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
-            .push(GameCommand::FadeOutHudText { id: id.to_owned(), duration });
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
+            .push(GameCommand::FadeOutHudText {
+                id: id.to_owned(),
+                duration,
+            });
         Ok(())
     }
 
     /// Fait apparaître progressivement un texte HUD existant.
     fn fade_in(&self, id: &str, duration: f32) -> PyResult<()> {
         if !duration.is_finite() || duration <= 0.0 {
-            return Err(pyo3::exceptions::PyValueError::new_err("La durée du fondu doit être un nombre positif."));
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "La durée du fondu doit être un nombre positif.",
+            ));
         }
-        self.queue.lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
-            .push(GameCommand::FadeInHudText { id: id.to_owned(), duration });
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
+            .push(GameCommand::FadeInHudText {
+                id: id.to_owned(),
+                duration,
+            });
         Ok(())
     }
 
     /// Supprime un texte HUD par son identifiant.
     fn remove_text(&self, id: &str) -> PyResult<()> {
-        self.queue.lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible"))?
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
             .push(GameCommand::RemoveHudText { id: id.to_owned() });
         Ok(())
     }
@@ -450,12 +563,19 @@ impl PyGameScene {
 
     #[getter]
     fn objects(&self) -> Vec<PyGameObject> {
-        self.scene.objects.iter().cloned().map(PyGameObject::from_object).collect()
+        self.scene
+            .objects
+            .iter()
+            .cloned()
+            .map(PyGameObject::from_object)
+            .collect()
     }
 
     /// Cherche un objet par UUID dans cette scène.
     fn get_object(&self, object_id: &str) -> Option<PyGameObject> {
-        self.scene.objects.iter()
+        self.scene
+            .objects
+            .iter()
             .find(|object| object.id.to_string().eq_ignore_ascii_case(object_id))
             .cloned()
             .map(PyGameObject::from_object)
@@ -463,7 +583,9 @@ impl PyGameScene {
 
     /// Retourne le premier objet dont le nom correspond exactement.
     fn find_object(&self, name: &str) -> Option<PyGameObject> {
-        self.scene.objects.iter()
+        self.scene
+            .objects
+            .iter()
             .filter(|object| object.name == name)
             .min_by_key(|object| object.id.to_string())
             .cloned()
@@ -642,7 +764,9 @@ impl PyGameContext {
 
     #[getter]
     fn ui(&self) -> PyGameUI {
-        PyGameUI { queue: Arc::clone(&self.queue) }
+        PyGameUI {
+            queue: Arc::clone(&self.queue),
+        }
     }
 
     #[getter]
@@ -703,7 +827,9 @@ impl PyGameContext {
 
     /// Retourne l'instantané de l'objet portant ce script.
     fn get_self_object(&self) -> PyResult<PyGameObject> {
-        Ok(PyGameObject::from_object(self.require_self_object()?.clone()))
+        Ok(PyGameObject::from_object(
+            self.require_self_object()?.clone(),
+        ))
     }
 
     /// Recherche un objet par nom exact, et signale une erreur s'il est absent.
@@ -716,14 +842,19 @@ impl PyGameContext {
     }
 
     /// Distance euclidienne 2D en unités de tuile, sans tenir compte de Z.
-    fn get_distance(&self, object1: PyRef<'_, PyGameObject>, object2: PyRef<'_, PyGameObject>) -> f64 {
+    fn get_distance(
+        &self,
+        object1: PyRef<'_, PyGameObject>,
+        object2: PyRef<'_, PyGameObject>,
+    ) -> f64 {
         let dx = f64::from(object1.object.tile_pos.x) - f64::from(object2.object.tile_pos.x);
         let dy = f64::from(object1.object.tile_pos.y) - f64::from(object2.object.tile_pos.y);
         dx.hypot(dy)
     }
 
     fn get_scene(&self, name: &str) -> Option<PyGameScene> {
-        self.scenes.iter()
+        self.scenes
+            .iter()
             .find(|scene| scene.name == name)
             .cloned()
             .map(|scene| PyGameScene { scene })
@@ -961,16 +1092,25 @@ impl PyGameContext {
         let json_value = py_any_to_json(value)?;
         self.globals
             .lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de variables globales inaccessible"))?
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err(
+                    "Verrou de variables globales inaccessible",
+                )
+            })?
             .insert(key, json_value);
         Ok(())
     }
 
     /// Lit une valeur partagée ; renvoie None si la clé n'a pas été définie.
     fn get_global(&self, py: Python<'_>, key: &str) -> PyResult<PyObject> {
-        let value = self.globals
+        let value = self
+            .globals
             .lock()
-            .map_err(|_| pyo3::exceptions::PyRuntimeError::new_err("Verrou de variables globales inaccessible"))?
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err(
+                    "Verrou de variables globales inaccessible",
+                )
+            })?
             .get(key)
             .cloned()
             .unwrap_or(serde_json::Value::Null);

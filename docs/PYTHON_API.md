@@ -154,8 +154,10 @@ if personnage is not None and coffre is not None:
 
 ### Texte d'interface (HUD)
 
-`game.ui.set_text(id, text, ..., visible=True)` crée ou remplace un texte affiché au-dessus
-de la scène en Lecture. `visible=False` le crée sans l'afficher ; `fade_in` le
+`game.ui.set_text(id, text, ..., visible=True, background_color=None)` crée ou
+remplace un texte affiché au-dessus de la scène en Lecture. `background_color`
+est une couleur RGBA optionnelle ; le moteur dessine alors un panneau arrondi
+avec 6 points de marge autour du texte. `visible=False` le crée sans l'afficher ; `fade_in` le
 rend visible avec un fondu. Les méthodes `update_text`, `update_position`,
 `update_anchor`, `update_font_size` et `update_color` modifient chacune un seul
 paramètre d'un texte existant, sans changer les autres. Un identifiant absent
@@ -179,6 +181,7 @@ def _on_game_launch(game: GameContext) -> None:
         anchor=game.ui_anchor.TOP_LEFT,
         font_size=24,
         color=(255, 255, 255, 255),
+        background_color=(24, 28, 34, 210),
     )
 
 
