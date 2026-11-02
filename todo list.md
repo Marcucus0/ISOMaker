@@ -2,9 +2,15 @@
 
 
 ## Editeur de tuile (logiciel presque à part)
-- Outil comme paint pour créer des textures à importer directement dans le moteur
-- On pourrait faire plusieurs tuiles d'un coup qui serait exportées une par une
-- genre de pain
+- **Première version implémentée** : l'Atelier de tuiles est un exécutable séparé
+  (`tile-editor.exe`) ouvert depuis **Fichier → Ouvrir l'atelier de tuiles**.
+- Il permet de dessiner sur une feuille composée de plusieurs tuiles, avec
+  crayon, gomme, remplissage, grille de pixels, zoom et annuler/rétablir.
+- Les feuilles `.isotilesheet` se sauvegardent dans le dossier d'assets du
+  projet ; l'export crée un PNG distinct pour chaque tuile.
+- **À poursuivre** : aperçu miniature des tuiles, palette de couleurs, copier /
+  coller, sélection et déplacement de zones, animation de sprites et connexion
+  directe des tuiles exportées à la palette du projet.
 
 ## Ajouter des timers
 

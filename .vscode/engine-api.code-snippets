@@ -81,5 +81,29 @@
       "    ${1:pass}",
       ""
     ]
+  },
+  "UI button callback": {
+    "scope": "python",
+    "prefix": "_on_ui_button",
+    "description": "Called when a scripted HUD button is activated",
+    "body": [
+      "def _on_ui_button(game: GameContext, button_id: str) -> None:",
+      "    \"\"\"Called when a HUD button is clicked or activated by keyboard.\"\"\"",
+      "    if button_id == \"${1:resume}\":",
+      "        ${2:game.resume()}",
+      ""
+    ]
+  },
+  "UI slider callback": {
+    "scope": "python",
+    "prefix": "_on_ui_slider",
+    "description": "Called when a scripted HUD slider value changes",
+    "body": [
+      "def _on_ui_slider(game: GameContext, slider_id: str, value: float) -> None:",
+      "    \"\"\"Called when a HUD slider changes by mouse or keyboard.\"\"\"",
+      "    if slider_id == \"${1:music_volume}\":",
+      "        ${2:game.audio.set_volume(music_id, value)}",
+      ""
+    ]
   }
 }

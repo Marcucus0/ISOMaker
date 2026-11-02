@@ -8,6 +8,33 @@ il décrit des besoins, pas nécessairement des fonctions déjà disponibles.
 
 ## Vue d'ensemble
 
+Le HUD de Lecture expose des elements interactifs declares par Python. Les
+commandes `SetHudButton` et `SetHudSlider` sont conservees dans l'etat de
+l'editeur puis dessinees et hit-testees par `SceneView`; les interactions
+appellent les hooks monde `_on_ui_button(game, id)` et
+`_on_ui_slider(game, id, value)`. `Pause` et `Resume` changent le mode de
+simulation sans retirer le HUD, ce qui permet au menu Python de rester actif
+pendant que les hooks de mise a jour du jeu sont suspendus.
+Les interactions avec un curseur mettent aussi a jour sa valeur conservee
+dans l'etat du HUD avant d'appeler le hook Python.
+Les lecteurs des sons de pas et des sons lances par Python sont egalement mis
+en pause puis repris a leur position courante lors des transitions de mode.
+`game.audio.pause()` et `resume()` controlent independamment cette sortie
+audio; leur etat est combine avec la pause du jeu pour eviter toute reprise
+audio prematuree.
+
+L'Atelier de tuiles est un binaire séparé du workspace, lancé depuis le menu
+**Fichier** de l'éditeur. Il conserve les feuilles `.isotilesheet` sous
+`<projet>/assets/tile_sheets/` et exporte une image PNG par tuile sous
+`<projet>/assets/images/tiles/<nom_du_tileset>/`. Il expose le renommage ainsi
+que la suppression des feuilles par clic droit. Les PNG exportés peuvent être référencés
+depuis les propriétés de texture. Les objets ont aussi un booléen
+`isometric_depth`, désactivé par défaut. Activé, il incline la texture en
+parallélogramme afin que ses bords horizontaux suivent un axe diagonal de la
+grille, sans la comprimer en losange. Ce mode prend priorité sur
+`fit_texture_to_diamond`, qui reste l'ajustement de l'image à un losange de
+tuile.
+
 Le workspace Rust est organisé en crates spécialisées. L'éditeur est le point
 d'entrée utilisable aujourd'hui : il combine la scène isométrique, les outils
 d'édition et l'inspecteur dans une interface `egui` rendue avec `wgpu`.
@@ -95,6 +122,14 @@ encore associé. Une définition personnalisée peut être supprimée après con
 les cases qui la référencent sont effacées dans toutes les scènes et les fichiers
 `tile-<id>.json` obsolètes sont retirés à l'enregistrement. La collision est une
 métadonnée utilisée pendant les déplacements en Lecture.
+Les scripts Python enregistrent les sources audio avec `game.audio.create(id, path)`
+puis les lancent par identifiant via `game.audio.play(id, volume, looping)`. Le meme
+identifiant sert a modifier le volume ou arreter la lecture. Les chemins sont
+resolus depuis le fichier `.isomaker` et limites au dossier du projet. La lecture
+passe par la file de commandes Python vers le mixer `rodio` ; les sons en cours
+sont arretes quand la simulation se termine. Le runtime garde aussi le dernier
+volume demande par identifiant pour le lire via `game.audio.get_volume(id)`.
+
 Les types d'objets personnalisés sont aussi sérialisés dans `.isomaker`, avec un
 UUID stable, un nom et un schéma de propriétés typées. Les valeurs par défaut génériques du type sont aussi sérialisées et copiées aux nouvelles instances. Les champs texte, entiers,
 décimaux, booléens et scène ont une valeur initiale copiée à la création de
@@ -107,6 +142,9 @@ non vides sont réparties dans des chunks de 16 × 16 tuiles. Les objets ont un
 identifiant stable, une position logique, une empreinte, une couche, des
 propriétés et, éventuellement, un chemin de texture. Le script Python est
 associé au monde.
+La rotation d'un objet applique un quart de tour de sa texture dans le rendu
+du viewport ; les sprites rectangulaires échangent largeur et hauteur pour
+conserver leur proportion lorsqu'ils sont tournés de 90 ou 270 degrés.
 Les noms d'objets sont uniques à l'intérieur d'une scène. À l'ajout ou au
 renommage, un doublon reçoit automatiquement le premier suffixe disponible,
 par exemple `Coffre`, `Coffre (1)`, `Coffre (2)`. Les identifiants restent
@@ -147,7 +185,8 @@ gestionnaire de fichiers enraciné dans le dossier `<nom_du_projet>/` à côté 
 fichier `.isomaker`; il permet de naviguer dans `assets/`, `scripts/` et les
 autres fichiers du projet. Un double-clic ouvre un fichier avec son application
 par défaut. Les menus contextuels permettent de créer, importer, renommer et
-supprimer des fichiers et dossiers. Les assets peuvent être déplacés entre
+supprimer des fichiers et dossiers, ou de copier le chemin de projet d'un
+fichier avec un préfixe `/`. Les assets peuvent être déplacés entre
 dossiers par glisser-déposer ; les chemins des textures d'objets, des types
 d'objets, des tuiles et des scripts sont actualisés, ainsi que ceux des sons de
 pas. Le gestionnaire différencie les icônes des images, sons, vidéos, scripts,
@@ -441,6 +480,21 @@ correspondant à l'interpréteur configuré pour PyO3. Il vérifie le contenu et
 l'intégrité de l'archive avant de signaler un succès. Les modules Python tiers
 ne sont pas collectés automatiquement ; le ZIP doit être essayé sur une
 installation Windows propre avant distribution.
+
+La sauvegarde préalable à l'export copie et relie les ressources d'instances,
+de tuiles et les valeurs par défaut des types d'objets dans les dossiers du
+projet. L'exporteur vérifie ensuite que les textures, scripts et sons référencés
+par le projet existent bien dans le paquet ; il refuse un ZIP incomplet. Les
+chemins absolus non importés dans le projet sont signalés comme non exportables.
+Une distribution autonome de l'éditeur fournit aussi `player.exe`,
+`python.exe` et le script d'export, afin que l'export depuis le menu ne dépende
+pas de Cargo ni des sources Rust.
+
+Pour distribuer l'éditeur Windows, les exécutables `editor.exe` et
+`tile-editor.exe` peuvent être placés avec le dossier `python-runtime` et la
+DLL Python correspondante. Au démarrage, les binaires détectent ce runtime à
+côté d'eux et configurent `PYTHONHOME` et `PATH`. Le dossier `target` de Cargo
+contient des artefacts de compilation et n'est pas requis dans la distribution.
 
 ## Démarrage
 

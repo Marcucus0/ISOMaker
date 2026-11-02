@@ -3,7 +3,7 @@
 use crate::{camera::Camera, toolbar::EditorTool};
 use egui::{Color32, Painter, Rect, Sense, Stroke, Ui, Vec2};
 use image::AnimationDecoder;
-use scripting::command::{HudAnchor, HudText};
+use scripting::command::{HudAnchor, HudButton, HudSlider, HudText};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -82,8 +82,12 @@ pub struct SceneView {
     animated_tile_textures: HashMap<String, AnimatedTileTexture>,
     failed_animated_tile_textures: HashSet<String>,
     object_hit_rects: HashMap<ObjectId, Rect>,
-    object_hit_diamonds: HashSet<ObjectId>,
+    object_hit_diamonds: HashMap<ObjectId, (egui::Pos2, f32, f32)>,
     clicked_object: Option<ObjectId>,
+    hud_button_clicks: Vec<String>,
+    hud_slider_changes: Vec<(String, f32)>,
+    hud_interaction: bool,
+    hud_focus: usize,
 }
 
 struct AnimatedTileFrame {
@@ -158,8 +162,12 @@ impl Default for SceneView {
             animated_tile_textures: HashMap::new(),
             failed_animated_tile_textures: HashSet::new(),
             object_hit_rects: HashMap::new(),
-            object_hit_diamonds: HashSet::new(),
+            object_hit_diamonds: HashMap::new(),
             clicked_object: None,
+            hud_button_clicks: Vec::new(),
+            hud_slider_changes: Vec::new(),
+            hud_interaction: false,
+            hud_focus: 0,
         }
     }
 }
@@ -257,8 +265,13 @@ impl SceneView {
         show_camera_selector: bool,
         runtime_camera: &mut Option<ObjectId>,
         hud_texts: &[HudText],
+        hud_buttons: &[HudButton],
+        hud_sliders: &[HudSlider],
     ) -> bool {
         let mut modified = false;
+        self.hud_button_clicks.clear();
+        self.hud_slider_changes.clear();
+        self.hud_interaction = false;
         self.update_animated_tile_textures(ui.ctx(), asset_root, tile_definitions, delta_time);
         let proj = scene.projection();
         let active_tool = if interactive {
@@ -960,6 +973,146 @@ impl SceneView {
                 }
                 hud_painter.galley(text_min, galley, text_color);
             }
+            let control_count =
+                hud_buttons.iter().filter(|button| button.visible).count() + hud_sliders.len();
+            if control_count > 0 {
+                if ui.input(|input| input.key_pressed(egui::Key::Tab)) {
+                    self.hud_focus = (self.hud_focus + 1) % control_count;
+                }
+                if self.hud_focus >= control_count {
+                    self.hud_focus = 0;
+                }
+            } else {
+                self.hud_focus = 0;
+            }
+            let mut control_index = 0;
+            for button in hud_buttons.iter().filter(|button| button.visible) {
+                let index = control_index;
+                control_index += 1;
+                let size = Vec2::new(button.width, button.height);
+                let anchor_pos = hud_anchor_position(button.anchor, rect, button.x, button.y);
+                let button_rect =
+                    Rect::from_min_size(hud_text_top_left(button.anchor, anchor_pos, size), size);
+                let response = ui.interact(
+                    button_rect,
+                    egui::Id::new(("script_hud_button", &button.id)),
+                    Sense::click(),
+                );
+                if response.clicked()
+                    || (self.hud_focus == index
+                        && ui.input(|input| {
+                            input.key_pressed(egui::Key::Enter)
+                                || input.key_pressed(egui::Key::Space)
+                        }))
+                {
+                    self.hud_button_clicks.push(button.id.clone());
+                    self.hud_interaction = true;
+                    self.hud_focus = index;
+                }
+                if response.hovered() {
+                    self.hud_focus = index;
+                }
+                let focused = self.hud_focus == index;
+                hud_painter.rect_filled(
+                    button_rect,
+                    5.0,
+                    if focused {
+                        Color32::from_rgb(55, 105, 165)
+                    } else {
+                        Color32::from_rgb(55, 65, 78)
+                    },
+                );
+                hud_painter.rect_stroke(
+                    button_rect,
+                    5.0,
+                    Stroke::new(
+                        if focused { 2.0_f32 } else { 1.0_f32 },
+                        if focused {
+                            Color32::from_rgb(145, 205, 255)
+                        } else {
+                            Color32::from_gray(125)
+                        },
+                    ),
+                );
+                hud_painter.text(
+                    button_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    &button.label,
+                    egui::FontId::proportional(18.0),
+                    Color32::WHITE,
+                );
+            }
+            for slider in hud_sliders {
+                let index = control_index;
+                control_index += 1;
+                let size = Vec2::new(slider.width, 42.0);
+                let anchor_pos = hud_anchor_position(slider.anchor, rect, slider.x, slider.y);
+                let slider_rect =
+                    Rect::from_min_size(hud_text_top_left(slider.anchor, anchor_pos, size), size);
+                let track = Rect::from_min_max(
+                    egui::pos2(slider_rect.left(), slider_rect.bottom() - 12.0),
+                    egui::pos2(slider_rect.right(), slider_rect.bottom() - 3.0),
+                );
+                let response = ui.interact(
+                    slider_rect,
+                    egui::Id::new(("script_hud_slider", &slider.id)),
+                    Sense::click_and_drag(),
+                );
+                let mut value = slider.value.clamp(slider.min, slider.max);
+                if response.clicked() || response.dragged() {
+                    if let Some(pointer) = response.interact_pointer_pos() {
+                        value = slider.min
+                            + ((pointer.x - track.left()) / track.width()).clamp(0.0, 1.0)
+                                * (slider.max - slider.min);
+                        self.hud_slider_changes.push((slider.id.clone(), value));
+                        self.hud_focus = index;
+                        self.hud_interaction = true;
+                    }
+                } else if self.hud_focus == index {
+                    let direction = ui.input(|input| {
+                        i32::from(input.key_pressed(egui::Key::ArrowRight))
+                            - i32::from(input.key_pressed(egui::Key::ArrowLeft))
+                    });
+                    if direction != 0 {
+                        value = (value + direction as f32 * (slider.max - slider.min) / 20.0)
+                            .clamp(slider.min, slider.max);
+                        self.hud_slider_changes.push((slider.id.clone(), value));
+                        self.hud_interaction = true;
+                    }
+                }
+                let label = format!(
+                    "{}: {:.0}%",
+                    slider.label,
+                    100.0 * (value - slider.min) / (slider.max - slider.min)
+                );
+                hud_painter.text(
+                    slider_rect.left_top(),
+                    egui::Align2::LEFT_TOP,
+                    label,
+                    egui::FontId::proportional(16.0),
+                    Color32::WHITE,
+                );
+                hud_painter.rect_filled(track, 4.0, Color32::from_gray(65));
+                let fraction = (value - slider.min) / (slider.max - slider.min);
+                hud_painter.rect_filled(
+                    Rect::from_min_max(
+                        track.min,
+                        egui::pos2(track.left() + track.width() * fraction, track.bottom()),
+                    ),
+                    4.0,
+                    Color32::from_rgb(80, 155, 225),
+                );
+                let knob_x = track.left() + track.width() * fraction;
+                hud_painter.circle_filled(
+                    egui::pos2(knob_x, track.center().y),
+                    7.0,
+                    if self.hud_focus == index {
+                        Color32::WHITE
+                    } else {
+                        Color32::LIGHT_GRAY
+                    },
+                );
+            }
         }
 
         if !interactive && show_camera_selector {
@@ -967,6 +1120,18 @@ impl SceneView {
         }
 
         modified
+    }
+
+    pub fn take_hud_button_clicks(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.hud_button_clicks)
+    }
+
+    pub fn take_hud_slider_changes(&mut self) -> Vec<(String, f32)> {
+        std::mem::take(&mut self.hud_slider_changes)
+    }
+
+    pub fn take_hud_interaction(&mut self) -> bool {
+        std::mem::take(&mut self.hud_interaction)
     }
 
     /// Dessine la grille isométrique et les tuiles peintes.
@@ -1335,15 +1500,39 @@ impl SceneView {
             let tile_rect =
                 Rect::from_min_size(egui::pos2(screen.x - size.x * 0.5, screen.y - size.y), size);
             let texture_id = texture.as_ref().map(|(texture_id, _)| *texture_id);
-            let r = match (texture.as_ref(), obj.fit_texture_to_diamond) {
-                (Some((_, texture_size)), false) => contain_rect(tile_rect, *texture_size),
-                _ => tile_rect,
+            let rotation_steps = match obj.rotation {
+                Rotation4::North => 0,
+                Rotation4::East => 1,
+                Rotation4::South => 2,
+                Rotation4::West => 3,
             };
-            self.object_hit_rects.insert(obj.id, r);
-            if texture_id.is_some() && obj.fit_texture_to_diamond {
-                self.object_hit_diamonds.insert(obj.id);
+            let natural_rect = match texture.as_ref() {
+                Some((_, texture_size)) => {
+                    let rotated_size = if rotation_steps % 2 == 0 {
+                        *texture_size
+                    } else {
+                        Vec2::new(texture_size.y, texture_size.x)
+                    };
+                    contain_rect(tile_rect, rotated_size)
+                }
+                None => tile_rect,
+            };
+            // Isometric projection is its own rendering mode. When enabled it
+            // takes precedence over the one-cell diamond fit.
+            let r = if obj.fit_texture_to_diamond && !obj.isometric_depth {
+                tile_rect
+            } else {
+                natural_rect
+            };
+            let iso_projection = (texture_id.is_some() && obj.isometric_depth)
+                .then(|| iso_skew_geometry(r, proj));
+            let render_bounds = iso_projection.map_or(r, |projection| projection.bounds);
+            self.object_hit_rects.insert(obj.id, render_bounds);
+            if texture_id.is_some() && obj.fit_texture_to_diamond && !obj.isometric_depth {
+                self.object_hit_diamonds
+                    .insert(obj.id, (screen, proj.half_width() * zoom, proj.half_height() * zoom));
             }
-            if !r.intersects(viewport) {
+            if !render_bounds.intersects(viewport) {
                 continue;
             }
 
@@ -1351,49 +1540,38 @@ impl SceneView {
                 self.selected_object == Some(obj.id) || self.selected_objects.contains(&obj.id);
             let size = r.size();
             if let Some(texture_id) = texture_id {
-                if obj.fit_texture_to_diamond {
-                    let half_width = proj.half_width() * zoom;
-                    let half_height = proj.half_height() * zoom;
-                    let corners = [
-                        egui::pos2(screen.x, screen.y - half_height),
-                        egui::pos2(screen.x + half_width, screen.y),
-                        egui::pos2(screen.x, screen.y + half_height),
-                        egui::pos2(screen.x - half_width, screen.y),
-                    ];
-                    let uvs = [
-                        egui::pos2(0.5, 0.0),
-                        egui::pos2(1.0, 0.5),
-                        egui::pos2(0.5, 1.0),
-                        egui::pos2(0.0, 0.5),
-                    ];
-                    let mut mesh = egui::Mesh::with_texture(texture_id);
-                    let first = mesh.vertices.len() as u32;
-                    for (position, uv) in corners.into_iter().zip(uvs) {
-                        mesh.vertices.push(egui::epaint::Vertex {
-                            pos: position,
-                            uv,
-                            color: Color32::WHITE,
-                        });
-                    }
-                    mesh.add_triangle(first, first + 1, first + 2);
-                    mesh.add_triangle(first, first + 2, first + 3);
-                    painter.add(egui::Shape::mesh(mesh));
+                if let Some(projection) = iso_projection {
+                    draw_isometric_projection(painter, texture_id, projection, rotation_steps);
                     if selected {
+                        for index in 0..projection.corners.len() {
+                            painter.line_segment(
+                                [projection.corners[index], projection.corners[(index + 1) % projection.corners.len()]],
+                                Stroke::new(2.0_f32, self.options.selection_color),
+                            );
+                        }
+                    }
+                } else {
+                    draw_object_texture(
+                        painter,
+                        texture_id,
+                        r,
+                        screen,
+                        proj,
+                        zoom,
+                        obj.fit_texture_to_diamond,
+                        rotation_steps,
+                        Vec2::ZERO,
+                        Color32::WHITE,
+                    );
+                    if selected && obj.fit_texture_to_diamond {
+                        let corners = iso_diamond_corners(screen, proj, zoom);
                         for index in 0..corners.len() {
                             painter.line_segment(
                                 [corners[index], corners[(index + 1) % corners.len()]],
                                 Stroke::new(2.0_f32, self.options.selection_color),
                             );
                         }
-                    }
-                } else {
-                    painter.image(
-                        texture_id,
-                        r,
-                        Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        Color32::WHITE,
-                    );
-                    if selected {
+                    } else if selected {
                         painter.rect_stroke(
                             r,
                             0.0,
@@ -1715,11 +1893,12 @@ impl SceneView {
                             default_size,
                         )
                     });
-                let contains = if self.object_hit_diamonds.contains(&object.id) {
-                    let screen = self.tile_to_screen(object.tile_pos, proj, center);
-                    let half_width = (proj.half_width() * self.camera.zoom).max(f32::EPSILON);
-                    let half_height = (proj.half_height() * self.camera.zoom).max(f32::EPSILON);
-                    let offset = pointer - screen;
+                let contains = if let Some((screen, half_width, half_height)) =
+                    self.object_hit_diamonds.get(&object.id)
+                {
+                    let half_width = half_width.max(f32::EPSILON);
+                    let half_height = half_height.max(f32::EPSILON);
+                    let offset = pointer - *screen;
                     offset.x.abs() / half_width + offset.y.abs() / half_height <= 1.0
                 } else {
                     bounds.contains(pointer)
@@ -1749,6 +1928,21 @@ fn hud_text_top_left(anchor: HudAnchor, anchor_pos: egui::Pos2, size: Vec2) -> e
         }
     };
     egui::pos2(x, y)
+}
+
+fn hud_anchor_position(anchor: HudAnchor, rect: Rect, x: f32, y: f32) -> egui::Pos2 {
+    let base = match anchor {
+        HudAnchor::TopLeft => rect.left_top(),
+        HudAnchor::TopCenter => egui::pos2(rect.center().x, rect.top()),
+        HudAnchor::TopRight => rect.right_top(),
+        HudAnchor::CenterLeft => egui::pos2(rect.left(), rect.center().y),
+        HudAnchor::Center => rect.center(),
+        HudAnchor::CenterRight => egui::pos2(rect.right(), rect.center().y),
+        HudAnchor::BottomLeft => rect.left_bottom(),
+        HudAnchor::BottomCenter => egui::pos2(rect.center().x, rect.bottom()),
+        HudAnchor::BottomRight => rect.right_bottom(),
+    };
+    base + Vec2::new(x, y)
 }
 
 fn load_animated_tile_texture(
@@ -1962,6 +2156,124 @@ fn append_colored_quad(mesh: &mut egui::Mesh, corners: [egui::Pos2; 4], color: C
     }
     mesh.add_triangle(first, first + 1, first + 2);
     mesh.add_triangle(first, first + 2, first + 3);
+}
+
+fn iso_diamond_corners(
+    center: egui::Pos2,
+    projection: &IsoProjection,
+    zoom: f32,
+) -> [egui::Pos2; 4] {
+    let half_width = projection.half_width() * zoom;
+    let half_height = projection.half_height() * zoom;
+    [
+        egui::pos2(center.x, center.y - half_height),
+        egui::pos2(center.x + half_width, center.y),
+        egui::pos2(center.x, center.y + half_height),
+        egui::pos2(center.x - half_width, center.y),
+    ]
+}
+
+#[derive(Clone, Copy)]
+struct IsoSkewGeometry {
+    corners: [egui::Pos2; 4],
+    bounds: Rect,
+}
+
+fn iso_skew_geometry(rect: Rect, projection: &IsoProjection) -> IsoSkewGeometry {
+    // Shear the sprite along one projected grid axis, keeping its rectangular
+    // footprint and image proportions instead of squeezing it into a diamond.
+    let half_shear = rect.width() * (projection.tile_height / projection.tile_width) * 0.5;
+    let base_corners = [
+        rect.left_top() - Vec2::new(0.0, half_shear),
+        rect.right_top() + Vec2::new(0.0, half_shear),
+        rect.right_bottom() + Vec2::new(0.0, half_shear),
+        rect.left_bottom() - Vec2::new(0.0, half_shear),
+    ];
+    let corners = base_corners;
+    let min = corners.iter().fold(
+        egui::pos2(f32::INFINITY, f32::INFINITY),
+        |min, point| egui::pos2(min.x.min(point.x), min.y.min(point.y)),
+    );
+    let max = corners.iter().fold(
+        egui::pos2(f32::NEG_INFINITY, f32::NEG_INFINITY),
+        |max, point| egui::pos2(max.x.max(point.x), max.y.max(point.y)),
+    );
+    let bounds = Rect::from_min_max(
+        min,
+        max,
+    );
+    IsoSkewGeometry { corners, bounds }
+}
+
+fn draw_isometric_projection(
+    painter: &Painter,
+    texture_id: egui::TextureId,
+    projection: IsoSkewGeometry,
+    rotation_steps: usize,
+) {
+    let base_uvs = [
+        egui::pos2(0.0, 0.0),
+        egui::pos2(1.0, 0.0),
+        egui::pos2(1.0, 1.0),
+        egui::pos2(0.0, 1.0),
+    ];
+    let mut mesh = egui::Mesh::with_texture(texture_id);
+    for (index, position) in projection.corners.into_iter().enumerate() {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: position,
+            uv: base_uvs[(index + 4 - rotation_steps) % 4],
+            color: Color32::WHITE,
+        });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+fn draw_object_texture(
+    painter: &Painter,
+    texture_id: egui::TextureId,
+    rect: Rect,
+    center: egui::Pos2,
+    projection: &IsoProjection,
+    zoom: f32,
+    fit_to_diamond: bool,
+    rotation_steps: usize,
+    offset: Vec2,
+    tint: Color32,
+) {
+    let corners = if fit_to_diamond {
+        iso_diamond_corners(center, projection, zoom)
+    } else {
+        [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()]
+    };
+    let base_uvs = if fit_to_diamond {
+        [
+            egui::pos2(0.5, 0.0),
+            egui::pos2(1.0, 0.5),
+            egui::pos2(0.5, 1.0),
+            egui::pos2(0.0, 0.5),
+        ]
+    } else {
+        [
+            egui::pos2(0.0, 0.0),
+            egui::pos2(1.0, 0.0),
+            egui::pos2(1.0, 1.0),
+            egui::pos2(0.0, 1.0),
+        ]
+    };
+    let mut mesh = egui::Mesh::with_texture(texture_id);
+    let first = mesh.vertices.len() as u32;
+    for (index, position) in corners.into_iter().enumerate() {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: position + offset,
+            uv: base_uvs[(index + 4 - rotation_steps) % 4],
+            color: tint,
+        });
+    }
+    mesh.add_triangle(first, first + 1, first + 2);
+    mesh.add_triangle(first, first + 2, first + 3);
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 fn append_diamond_outline(

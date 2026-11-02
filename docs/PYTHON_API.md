@@ -159,7 +159,7 @@ remplace un texte affiché au-dessus de la scène en Lecture. `background_color`
 est une couleur RGBA optionnelle ; le moteur dessine alors un panneau arrondi
 avec 6 points de marge autour du texte. `visible=False` le crée sans l'afficher ; `fade_in` le
 rend visible avec un fondu. Les méthodes `update_text`, `update_position`,
-`update_anchor`, `update_font_size` et `update_color` modifient chacune un seul
+`update_anchor`, `update_font_size`, `update_color` et `update_visibility` modifient chacune un seul
 paramètre d'un texte existant, sans changer les autres. Un identifiant absent
 est ignoré ; utilise `set_text` pour créer l'élément. `game.ui.remove_text(id)`
 le retire. Les identifiants
@@ -197,6 +197,7 @@ def actualiser_score(game: GameContext, score: int) -> None:
     game.ui.update_anchor("score", game.ui_anchor.TOP_LEFT)
     game.ui.update_font_size("score", 28)
     game.ui.update_color("score", (255, 220, 80, 255))
+    game.ui.update_visibility("score", score >= 0)
 ```
 
 Les neuf ancres sont disponibles via `game.ui_anchor` : `TOP_LEFT`,
@@ -210,6 +211,119 @@ de quatre entiers entre 0 et 255, blanc par défaut.
 Le HUD est global pendant la session, visible en Lecture et en Pause, et effacé
 au Stop. Il n'est pas enregistré dans le fichier projet et les textes ne sont
 pas interactifs dans cette première version.
+
+### Boutons, curseurs et pause
+
+Le HUD peut aussi recevoir des controles interactifs. `game.ui.set_button(id, label, x=0, y=0, width=180, height=42,
+anchor=None, visibility=True)` cree ou remplace un bouton. `visibility=False`
+le cree masque ; `game.ui.update_visibility(id, visible)` masque ou reaffiche
+un texte ou bouton existant. `remove_button(id)` retire le bouton. Un clic appelle
+`_on_ui_button(game, button_id)` dans le script monde.
+
+`game.ui.set_slider(id, label, x=0, y=0, width=240, value=1.0, minimum=0.0,
+maximum=1.0, anchor=None)` cree un curseur ; `remove_slider(id)` le retire.
+Un changement appelle `_on_ui_slider(game, slider_id, value)`. Tab passe au
+controle suivant, Entree ou Espace active un bouton, et les fleches gauche et
+droite changent la valeur d'un curseur focalise. Le hook peut appeler
+`game.audio.set_volume` pour appliquer la valeur a un son. La valeur choisie
+est conservee par le HUD ; il n'est pas necessaire de rappeler `set_slider`
+dans le hook, sauf si le script veut explicitement imposer une autre valeur.
+
+`game.pause()` suspend les hooks de mise a jour du monde et des objets tout en
+gardant le HUD interactif. `game.resume()` reprend la simulation. En mode
+lecteur, Echap est transmis au script monde pour ouvrir son menu personnalise.
+`game.stop()` arrete la lecture, restaure la scene telle qu'elle etait avant
+le lancement et revient a l'editeur (ou quitte le lecteur autonome).
+
+Exemple de menu de pause avec bouton Reprendre et volume de musique :
+
+```python
+menu_pause = False
+MUSIC_ID = "musique_pause"
+volume_musique = 0.5
+
+
+def _on_game_launch(game: GameContext) -> None:
+    game.audio.create(MUSIC_ID, "/project/assets/audio/ambiance.ogg")
+    game.audio.play(MUSIC_ID, volume=volume_musique, looping=True)
+
+
+def _on_update(game: GameContext, delta_time: float) -> None:
+    global menu_pause
+    if game.key_just_pressed(game.keys.ESCAPE) and not menu_pause:
+        menu_pause = True
+        game.pause()
+        game.ui.set_text(
+            "pause_titre", "Pause", x=0, y=-100,
+            anchor=game.ui_anchor.CENTER, font_size=32,
+            background_color=(20, 24, 30, 220),
+        )
+        game.ui.set_button("reprendre", "Reprendre", x=0, y=-20,
+                           anchor=game.ui_anchor.CENTER)
+        game.ui.set_slider("volume_musique", "Musique", x=0, y=45,
+                           value=volume_musique, anchor=game.ui_anchor.CENTER)
+
+
+def _on_ui_button(game: GameContext, button_id: str) -> None:
+    global menu_pause
+    if button_id == "reprendre":
+        menu_pause = False
+        game.ui.remove_text("pause_titre")
+        game.ui.remove_button("reprendre")
+        game.ui.remove_slider("volume_musique")
+        game.resume()
+
+
+def _on_ui_slider(game: GameContext, slider_id: str, value: float) -> None:
+    global volume_musique
+    if slider_id == "volume_musique":
+        volume_musique = value
+        game.audio.set_volume(MUSIC_ID, value)
+        game.ui.set_slider("volume_musique", "Musique", x=0, y=45,
+                           value=value, anchor=game.ui_anchor.CENTER)
+```
+
+### Audio
+
+Les sons se declarent d'abord avec `game.audio.create(id, path)`, puis se jouent
+avec `game.audio.play(id, volume=1.0, looping=False)`. `play` retourne le meme
+identifiant, utilisable par `stop(id)` et `set_volume(id, volume)`. Les identifiants
+sont uniques dans le projet et chacun controle une lecture active ; pour jouer
+plusieurs fois la meme source simultanement, cree plusieurs identifiants. Les
+chemins acceptent la racine virtuelle `/project/`. Les formats WAV, MP3 et OGG
+sont pris en charge ; le volume va de `0.0` a `1.0`. `get_volume(id)` renvoie
+le dernier volume demandé par `play` ou `set_volume`, ou `None` si le son n'a pas
+encore été joué ou configuré pendant cette session.
+
+```python
+MUSIC_ID = "musique_fond"
+CHEST_SOUND_ID = "son_coffre"
+
+
+def _on_game_launch(game: GameContext) -> None:
+    game.audio.create(MUSIC_ID, "/project/assets/audio/Breaking the Habit.wav")
+    game.audio.play(MUSIC_ID, volume=0.05, looping=True)
+    game.audio.create(CHEST_SOUND_ID, "/project/assets/audio/coffre.ogg")
+
+
+def _on_click(game: GameContext) -> None:
+    game.audio.play(CHEST_SOUND_ID, volume=0.8)
+
+
+def ajuster_musique(game: GameContext, value: float) -> None:
+    game.audio.set_volume(MUSIC_ID, value)
+
+
+def arreter_musique(game: GameContext) -> None:
+    game.audio.stop(MUSIC_ID)
+```
+
+`game.audio.pause()` suspend les sons de pas et les sons Python en cours ;
+`game.audio.resume()` les reprend a leur position courante. Ces methodes ne
+mettent pas le jeu en pause. Les sons crees et lances pendant la suspension
+restent en pause jusqu'a la reprise. Les sons et leurs sources sont arretes et
+liberes a la fin du mode Lecture. Les erreurs de creation et de lecture sont
+consignees avec le nom du script.
 
 ### Propriétés d'un objet
 
@@ -227,6 +341,7 @@ ne signifie pas qu'il est déjà exposé à Python.
 | Masqué (`hidden`) | Case à cocher, désactivée par défaut | `game.hidden` en lecture ; `set_self_property("hidden", bool)` pour l'écriture. |
 | Texture (`asset_path`, propriété `texture`) | Fichier image sélectionnable pour les objets autres que les caméras | `game.texture` en lecture ; `set_self_property("texture", chemin)` ou `None` pour l'écriture. |
 | Ajuster la texture (`fit_texture_to_diamond`) | Case à cocher, activée par défaut pour les objets autres que les caméras | `game.fit_texture_to_diamond` en lecture ; `set_self_property("fit_texture_to_diamond", bool)` pour l'écriture. |
+| Projection isométrique (`isometric_depth`) | Case à cocher, désactivée par défaut ; incline le sprite en parallélogramme selon la grille | `game.isometric_depth` en lecture ; `set_self_property("isometric_depth", bool)` pour l'écriture. |
 | Rotation (`rotation`) | `North`, `East`, `South` ou `West` pour les objets autres que les caméras | `game.rotation` en lecture ; `set_self_property("rotation", valeur)` pour l'écriture. |
 | Zoom caméra (`camera_zoom`) | Réglage dédié aux caméras | `game.camera_zoom` en lecture ; `set_self_property("camera_zoom", nombre)` en écriture. |
 | Interpolation caméra (`camera_interpolation`) | Case à cocher sur les caméras, activée par défaut | `game.camera_interpolation` en lecture ; `set_self_property("camera_interpolation", bool)` en écriture. |
@@ -252,7 +367,7 @@ def _on_game_launch(game: GameContext) -> None:
 ```
 
 `id` et `object_type` sont en lecture seule. Les clés `name`, `x`, `y`, `z`,
-`has_collisions`, `hidden`, `fit_texture_to_diamond`, `rotation`, `layer`,
+`has_collisions`, `hidden`, `fit_texture_to_diamond`, `isometric_depth`, `rotation`, `layer`,
 `texture` (alias `asset_path`), `script`, `footprint_width` et
 `footprint_height` mettent à jour les champs intégrés.
 Les rotations acceptent `North`, `East`, `South` ou `West` ; les couches

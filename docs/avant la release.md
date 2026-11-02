@@ -86,3 +86,13 @@ Vérification effectuée pour la release 0.5.0 le 31 octobre 2026 :
 - `cargo build --release -p editor` dans `target/release-check` : réussi.
 - `cargo test --workspace` dans `target/release-check` : 29 tests réussis.
 - `python -m unittest discover -s python/tests -v` : 5 tests réussis.
+
+
+V?rification effectu?e pour la release 0.7.0 le 2 novembre 2026 :
+
+- Documentation contr?l?e : `ARCHITECTURE.md`, `PROGRESSION.md`, `PYTHON_API.md`, `CHANGELOG.md` et README ; le chemin d'export PNG de l'Atelier de tuiles a ?t? harmonis? dans l'architecture.
+- Param?tres et snippets VS Code contr?l?s ; `settings.json`, `extensions.json` et `engine-api.code-snippets` sont valides en JSON et le stub Python est pr?sent dans `extraPaths`.
+- `cargo check --workspace --locked` : r?ussi sans avertissement.
+- `cargo build --release -p editor --bins --locked` dans `target/release-check` : r?ussi.
+- `cargo test --workspace --locked` dans `target/release-check` : 29 tests r?ussis.
+- `python -m unittest discover -s python/tests -v` : 5 tests r?ussis.

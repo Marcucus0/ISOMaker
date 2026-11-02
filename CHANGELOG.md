@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0 — 2026-11-02
+
+### Ajouté
+
+- Atelier de tuiles avec projets renommables ou supprimables, prise en charge
+  des noms UTF-8 et création de projets en 1×1.
+- Projection isométrique indépendante de l'ajustement dans le losange pour les
+  textures d'objet, avec conservation du réglage dans les projets.
+- Audio Python avec sources nommées, lecture, volume, arrêt et pause/reprise.
+- Boutons et curseurs HUD pilotables depuis les scripts Python.
+- Export autonome depuis la distribution Windows, sans Cargo sur la machine
+  cible.
+
+### Corrigé
+
+- Les ressources par défaut des types d'objets sont copiées dans le projet lors
+  de la sauvegarde.
+- L'export vérifie les textures, scripts et sons référencés, y compris les sons
+  littéraux de `game.audio.create`, et refuse un paquet incomplet.
+- Amélioration de l'interface des propriétés et de l'affichage des tuiles dans
+  les panneaux de l'éditeur.
+
 ## 0.6.0 — 2026-11-01
 
 ### Ajouté

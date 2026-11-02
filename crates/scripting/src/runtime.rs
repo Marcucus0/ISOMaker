@@ -10,7 +10,7 @@ use thiserror::Error;
 
 type ObjectScriptState = world::object::SceneObject;
 use crate::{
-    api::{CommandQueue, GlobalStore, PyGameContext, SceneSnapshot},
+    api::{AudioVolumeStore, CommandQueue, GlobalStore, PyGameContext, SceneSnapshot},
     command::GameCommand,
 };
 
@@ -57,6 +57,12 @@ enum HookTarget {
     Objects,
 }
 
+enum HookArgument {
+    None,
+    Button(String),
+    Slider(String, f32),
+}
+
 /// Gère le cycle de vie des scripts Python.
 ///
 /// Un seul `ScriptRuntime` par application. Détient le GIL quand il en a besoin,
@@ -67,6 +73,7 @@ pub struct ScriptRuntime {
     queue: CommandQueue,
     scenes: Arc<Vec<SceneSnapshot>>,
     globals: GlobalStore,
+    audio_volumes: AudioVolumeStore,
     /// Indique si on_start a déjà été appelé.
     started: bool,
 }
@@ -78,6 +85,7 @@ impl ScriptRuntime {
             queue: Arc::new(Mutex::new(Vec::new())),
             scenes: Arc::new(Vec::new()),
             globals: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            audio_volumes: Arc::new(Mutex::new(std::collections::HashMap::new())),
             started: false,
         }
     }
@@ -89,6 +97,12 @@ impl ScriptRuntime {
     pub fn clear_globals(&mut self) {
         if let Ok(mut globals) = self.globals.lock() {
             globals.clear();
+        }
+    }
+
+    fn clear_audio_volumes(&self) {
+        if let Ok(mut volumes) = self.audio_volumes.lock() {
+            volumes.clear();
         }
     }
 
@@ -141,6 +155,8 @@ impl ScriptRuntime {
                 "_on_area_stayed",
                 "_on_area_exited",
                 "_on_click",
+                "_on_ui_button",
+                "_on_ui_slider",
             ]
             .into_iter()
             .filter_map(|hook| {
@@ -158,7 +174,7 @@ impl ScriptRuntime {
             kind,
             hooks,
         });
-        log::info!("Script chargé : {}", path.display());
+        log::debug!("Script chargé : {}", path.display());
         Ok(())
     }
 
@@ -170,6 +186,7 @@ impl ScriptRuntime {
             q.clear();
         }
         self.clear_globals();
+        self.clear_audio_volumes();
     }
 
     /// Appelle `on_start(game)` sur tous les scripts chargés.
@@ -186,6 +203,7 @@ impl ScriptRuntime {
             HookTarget::Legacy,
             &[],
             InputState::default(),
+            HookArgument::None,
         )
     }
 
@@ -199,6 +217,7 @@ impl ScriptRuntime {
             HookTarget::World,
             objects,
             InputState::default(),
+            HookArgument::None,
         )
     }
 
@@ -214,6 +233,7 @@ impl ScriptRuntime {
             HookTarget::World,
             objects,
             input.clone(),
+            HookArgument::None,
         )
     }
 
@@ -227,6 +247,7 @@ impl ScriptRuntime {
             HookTarget::Objects,
             objects,
             InputState::default(),
+            HookArgument::None,
         )
     }
 
@@ -242,6 +263,7 @@ impl ScriptRuntime {
             HookTarget::Objects,
             objects,
             input.clone(),
+            HookArgument::None,
         )
     }
 
@@ -253,6 +275,40 @@ impl ScriptRuntime {
             HookTarget::Legacy,
             &[],
             InputState::default(),
+            HookArgument::None,
+        )
+    }
+
+    pub fn call_world_ui_button(
+        &self,
+        id: &str,
+        objects: &[ObjectScriptState],
+        input: &InputState,
+    ) -> Result<Vec<GameCommand>, ScriptError> {
+        self.call_hook(
+            "_on_ui_button",
+            0.0,
+            HookTarget::World,
+            objects,
+            input.clone(),
+            HookArgument::Button(id.to_owned()),
+        )
+    }
+
+    pub fn call_world_ui_slider(
+        &self,
+        id: &str,
+        value: f32,
+        objects: &[ObjectScriptState],
+        input: &InputState,
+    ) -> Result<Vec<GameCommand>, ScriptError> {
+        self.call_hook(
+            "_on_ui_slider",
+            0.0,
+            HookTarget::World,
+            objects,
+            input.clone(),
+            HookArgument::Slider(id.to_owned(), value),
         )
     }
 
@@ -338,6 +394,7 @@ impl ScriptRuntime {
                     Arc::clone(&scene_objects),
                     Arc::clone(&self.scenes),
                     Arc::clone(&self.globals),
+                    Arc::clone(&self.audio_volumes),
                     input.clone(),
                     format!("{script_file} — {}", object.name),
                 );
@@ -426,6 +483,7 @@ impl ScriptRuntime {
                     Arc::clone(&scene_objects),
                     Arc::clone(&self.scenes),
                     Arc::clone(&self.globals),
+                    Arc::clone(&self.audio_volumes),
                     input.clone(),
                     script_source,
                 );
@@ -473,9 +531,11 @@ impl ScriptRuntime {
             HookTarget::Legacy,
             &[],
             InputState::default(),
+            HookArgument::None,
         );
         self.started = false;
         self.clear_globals();
+        self.clear_audio_volumes();
         result
     }
 
@@ -487,6 +547,7 @@ impl ScriptRuntime {
         target: HookTarget,
         objects: &[ObjectScriptState],
         input: InputState,
+        argument: HookArgument,
     ) -> Result<Vec<GameCommand>, ScriptError> {
         if !self.has_hook(hook, target) {
             return Ok(Vec::new());
@@ -548,7 +609,7 @@ impl ScriptRuntime {
                     .map(|object| format!("{script_file} — {}", object.name))
                     .unwrap_or_else(|| script_file.to_owned());
                 if hook == "_on_game_launch" && target == HookTarget::Objects {
-                    log::info!(
+                    log::debug!(
                         "Appel de _on_game_launch pour l'objet {} ({})",
                         object_id.as_deref().unwrap_or("?"),
                         loaded.path.display()
@@ -563,16 +624,20 @@ impl ScriptRuntime {
                     Arc::clone(&scene_objects),
                     Arc::clone(&self.scenes),
                     Arc::clone(&self.globals),
+                    Arc::clone(&self.audio_volumes),
                     input.clone(),
                     script_source,
                 );
                 let py_ctx = Py::new(py, ctx).map_err(|e| ScriptError::Python(e.to_string()))?;
 
                 // Appelle la fonction selon le hook.
-                let result = if hook == "on_update" || hook == "_on_update" {
-                    func.call1((py_ctx, delta_time))
-                } else {
-                    func.call1((py_ctx,))
+                let result = match &argument {
+                    HookArgument::Button(id) => func.call1((py_ctx, id.as_str())),
+                    HookArgument::Slider(id, value) => func.call1((py_ctx, id.as_str(), *value)),
+                    HookArgument::None if hook == "on_update" || hook == "_on_update" => {
+                        func.call1((py_ctx, delta_time))
+                    }
+                    HookArgument::None => func.call1((py_ctx,)),
                 };
 
                 // Capture et logue les erreurs Python sans crasher le moteur.

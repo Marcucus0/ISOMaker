@@ -119,7 +119,7 @@ impl LeftPanel {
         ui.horizontal_wrapped(|ui| {
             ui.selectable_value(&mut self.tab, LeftPanelTab::Hierarchy, "📋 Scène");
             ui.selectable_value(&mut self.tab, LeftPanelTab::Tiles, "🎨 Tuiles");
-            ui.selectable_value(&mut self.tab, LeftPanelTab::ObjectTypes, "◈ Types");
+            ui.selectable_value(&mut self.tab, LeftPanelTab::ObjectTypes, "◈ Objets");
             ui.selectable_value(&mut self.tab, LeftPanelTab::Assets, "📁 Assets");
         });
         ui.separator();
@@ -684,6 +684,12 @@ impl LeftPanel {
                             action = PanelAction::OpenFile(entry.path.clone());
                             ui.close_menu();
                         }
+                        if !entry.is_directory && ui.button("Copier le chemin").clicked() {
+                            if let Some(path) = project_relative_asset_path(&root, &entry.path) {
+                                ui.ctx().copy_text(path);
+                            }
+                            ui.close_menu();
+                        }
                         if ui.button("Nouveau dossier…").clicked() {
                             self.browser_dialog =
                                 Some(BrowserDialog::CreateDirectory(current.clone()));
@@ -835,6 +841,16 @@ fn read_browser_entries(directory: &Path) -> Vec<BrowserEntry> {
             .then_with(|| a.path.file_name().cmp(&b.path.file_name()))
     });
     entries
+}
+
+fn project_relative_asset_path(project_root: &Path, asset_path: &Path) -> Option<String> {
+    let project_name = project_root.file_name()?.to_string_lossy();
+    let relative_path = asset_path
+        .strip_prefix(project_root)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
+    Some(format!("/{project_name}/{relative_path}"))
 }
 
 fn move_payload_to(paths: &[PathBuf], destination_directory: &Path) -> PanelAction {

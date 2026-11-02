@@ -172,6 +172,7 @@ pub struct Toolbar {
     pub save_as_requested: bool,
     pub quit_requested: bool,
     pub export_requested: bool,
+    pub tile_editor_requested: bool,
     pub scene_switch_requested: Option<usize>,
     pub new_scene_requested: bool,
     pub scene_rename_requested: Option<usize>,
@@ -193,6 +194,7 @@ impl Default for Toolbar {
             save_as_requested: false,
             quit_requested: false,
             export_requested: false,
+            tile_editor_requested: false,
             scene_switch_requested: None,
             new_scene_requested: false,
             scene_rename_requested: None,
@@ -227,6 +229,7 @@ impl Toolbar {
         self.save_as_requested = false;
         self.quit_requested = false;
         self.export_requested = false;
+        self.tile_editor_requested = false;
         self.scene_switch_requested = None;
         self.new_scene_requested = false;
         self.scene_rename_requested = None;
@@ -287,6 +290,10 @@ impl Toolbar {
                         .clicked()
                     {
                         self.export_requested = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("Ouvrir l'atelier de tuiles...").clicked() {
+                        self.tile_editor_requested = true;
                         ui.close_menu();
                     }
                 });

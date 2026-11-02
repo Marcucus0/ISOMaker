@@ -50,7 +50,8 @@ complet prêt au déploiement.
   déposer ; textures, sons et scripts référencés par les objets, types d'objets
   et tuiles sont mis à jour et le projet est sauvegardé. Des icônes distinctes
   identifient les dossiers, images (dont les GIF), fichiers audio, vidéos,
-  scripts Python, fichiers JSON et autres fichiers.
+  scripts Python, fichiers JSON et autres fichiers. Le menu clic droit d'un
+  fichier propose **Copier le chemin** sous la forme `/projet/chemin/asset`.
 - **Fermeture** : compare le projet à son dernier enregistrement depuis la
   croix de la fenêtre ou **Fichier → Quitter**. En cas de changements, propose
   Sauvegarder et quitter, Quitter sans sauvegarder ou Annuler. La confirmation
@@ -66,6 +67,16 @@ complet prêt au déploiement.
   remplissage de zones contiguës ou de la sélection, annulation et
   rétablissement. `F` active Peindre et `G` active Gomme. En Lecture et en
   Pause, les commandes d'édition sont bloquées pour laisser le clavier au jeu.
+- **Atelier de tuiles** : binaire autonome ouvert depuis **Fichier**. Il permet
+  de dessiner au pixel sur une feuille multi-tuiles (crayon, gomme, remplissage,
+  zoom, grille, annuler/rétablir), de sauvegarder les feuilles `.isotilesheet`
+  et d'exporter chaque tuile en PNG dans les assets du projet. Les feuilles
+  peuvent être renommées ou supprimées depuis leur menu clic droit.
+- **Projection isométrique des objets** : l'inspecteur propose un mode qui
+  incline le sprite en parallélogramme pour aligner ses bords horizontaux sur
+  un axe diagonal de la grille. Il est distinct de l'ajustement au losange et
+  prend priorité quand les deux cases sont cochées. Python peut la modifier
+  avec `isometric_depth`.
 - **Tuiles personnalisées** : chaque projet démarre avec les six terrains
   historiques et peut ajouter ses propres tuiles. Leur nom, couleur, texture
   PNG/JPEG ou GIF animé, collision, rotation pseudo-aléatoire de la texture
@@ -105,7 +116,8 @@ complet prêt au déploiement.
 - **Interface HUD** : les scripts peuvent créer ou actualiser du texte avec
   `game.ui.set_text`, modifier séparément son contenu, sa position, son ancrage,
   sa taille ou sa couleur, puis le retirer par identifiant avec
-  `game.ui.remove_text`. Neuf points d'ancrage positionnent les textes dans le
+  `game.ui.remove_text`. `game.ui.update_visibility` masque ou réaffiche un
+  texte sans le supprimer. Neuf points d'ancrage positionnent les textes dans le
   viewport en points d'interface. Le HUD persiste pendant la pause et est vidé
   au Stop ; il n'est pas sauvegardé dans le projet et n'est pas interactif.
 - **Contrôles du viewport en Lecture** : la barre de statut permet d'afficher
@@ -147,6 +159,11 @@ complet prêt au déploiement.
   copiés dans les assets du projet et joués en Lecture après un déplacement
   réussi d'une case effectué par un script. Les déplacements bloqués restent
   silencieux.
+- **Audio Python** : `game.audio.create(id, path)` enregistre une source, puis
+  `game.audio.play(id, volume=1.0, looping=False)` la joue. Le meme identifiant
+  sert a l'arreter, a regler son volume avec `set_volume` ou a le consulter avec
+  `get_volume` (`None` avant lecture/configuration). `pause` et `resume`
+  suspendent ou reprennent les sons sans interrompre le jeu.
 - **Zones de détection** : un objet dont le script définit `_on_area_entered`,
   `_on_area_stayed` ou `_on_area_exited` détecte les autres empreintes
   rectangulaires qui le recouvrent au même étage. L'empreinte se règle dans
@@ -163,6 +180,8 @@ complet prêt au déploiement.
   choisies dans la liste des scènes du projet et sont actualisées quand une
   scène est renommée ou supprimée. Types et valeurs sont sauvegardés dans
   `.isomaker` ; les données legacy de bâtiments restent lisibles.
+- **Rotation des objets** : la propriété d'orientation applique maintenant
+  les quarts de tour à la texture dans le viewport, en édition comme en Lecture.
 - **Noms d'objets** : les noms sont uniques par scène. Lors d'un ajout ou d'un
   renommage qui ferait doublon, le moteur choisit automatiquement le premier
   suffixe libre, comme `Coffre (1)`.
@@ -194,8 +213,15 @@ complet prêt au déploiement.
   demande le chemin de sortie et lance la compilation en arrière-plan.
   `scripts/export_game.py` compile le lecteur et produit un ZIP portable avec
   le projet, son dossier associé et la bibliothèque standard Python. Les
-  paquets Python tiers ne sont pas inclus automatiquement. Le succès et les
-  erreurs détaillées sont consignés dans le panneau Log, après validation ZIP.
+  textures, sons, scripts et valeurs par défaut des types sont vérifiés dans
+  l'archive. Les paquets Python tiers ne sont pas inclus automatiquement. Le
+  succès et les erreurs détaillées sont consignés dans le panneau Log, après
+  validation ZIP.
+- **Distribution Windows de l'éditeur** : `editor.exe` et `tile-editor.exe`
+  sont publiés avec le runtime Python embarqué ; les caches Cargo restent hors
+  du dossier distribuable. `player.exe`, `python.exe` et l'exporteur Python
+  permettent d'exporter un jeu depuis cette distribution sans Cargo ni les
+  sources Rust. Le runtime livré est détecté au lancement.
 
 ### Limites connues et travail restant
 
@@ -261,8 +287,25 @@ Après l'ajout des tests pour les tuiles personnalisées et animées :
   distinct pour éviter le verrou Windows sur `target/debug/editor.exe`.
 - `python -m unittest discover -s python/tests -v` : 5 tests réussis.
 
-## Lancer l'éditeur
 
+## Interface de jeu Python
+
+- Le HUD Python prend en charge les boutons (`set_button`) et curseurs
+  (`set_slider`) interactifs. Tab et Entree/Espace parcourent et activent les
+  boutons ; les fleches gauche/droite ajustent un curseur focalise. Les hooks
+  monde `_on_ui_button` et `_on_ui_slider` recoivent les actions.
+  `visibility=False` masque un bouton au depart et `update_visibility(id,
+  visible)` le masque ou le reaffiche ensuite.
+- `game.pause()` suspend les mises a jour monde/objets tout en gardant le HUD
+  interactif ; `game.resume()` reprend la simulation. En mode lecteur, Echap
+  est transmis aux scripts pour ouvrir un menu de pause personnalise.
+- La pause met aussi en attente les sons de pas et les sons Python, puis les
+  reprend a leur position courante avec la simulation.
+- `game.audio.pause()` et `game.audio.resume()` permettent aussi de suspendre
+  et reprendre tous les sons depuis Python, sans mettre le jeu en pause.
+- `game.stop()` arrete la lecture depuis Python et restaure la scene d'edition.
+
+## Lancer l'éditeur
 Depuis la racine du dépôt, avec Rust installé :
 
 ```powershell

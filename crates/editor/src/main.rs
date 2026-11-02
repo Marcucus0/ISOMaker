@@ -22,13 +22,20 @@ fn main() {
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"));
     // Keep engine info logs while hiding wgpu's per-frame submission waits.
     logger.filter_module("wgpu_core::device::resource", log::LevelFilter::Warn);
+    // WAV encoders often include harmless JUNK metadata chunks; Symphonia logs
+    // each one at INFO whenever a footstep sound is decoded.
+    logger.filter_module("symphonia_format_riff::common", log::LevelFilter::Warn);
     logger.init();
 
     log::info!("=== Moteur de jeu 2D isométrique ===");
 
+    // Use a Python runtime shipped next to the executable when present. This
+    // keeps both the editor and the standalone player portable; development
+    // builds without that folder continue to use the system Python runtime.
+    prepare_bundled_python();
+
     let is_player = env!("CARGO_BIN_NAME") == "player";
     let initial_editor = if is_player {
-        prepare_bundled_python();
         let project_path = std::env::args_os()
             .nth(1)
             .map(std::path::PathBuf::from)

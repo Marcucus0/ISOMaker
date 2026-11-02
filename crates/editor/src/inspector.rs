@@ -282,6 +282,7 @@ impl Inspector {
         let mut has_collisions = obj.has_collisions;
         let mut hidden = obj.hidden;
         let mut fit_texture_to_diamond = obj.fit_texture_to_diamond;
+        let mut isometric_depth = obj.isometric_depth;
         let mut script = obj.script.clone().unwrap_or_default();
         let mut layer_key = obj.layer.sort_key();
         let obj_type = obj.object_type.clone();
@@ -429,14 +430,14 @@ impl Inspector {
                             ui.end_row();
 
                             ui.label("Caméra principale");
-                            if ui.checkbox(&mut camera_is_main, "Au lancement").changed() {
+                            if ui.checkbox(&mut camera_is_main, "").changed() {
                                 modified = true;
                                 camera_main_changed = true;
                             }
                             ui.end_row();
 
                             ui.label("Interpolation");
-                            if ui.checkbox(&mut camera_interpolation, "Activée").changed() {
+                            if ui.checkbox(&mut camera_interpolation, "").changed() {
                                 modified = true;
                             }
                             ui.end_row();
@@ -471,7 +472,7 @@ impl Inspector {
                     .striped(true)
                     .show(ui, |ui| {
                         ui.label("Masqué");
-                        if ui.checkbox(&mut hidden, "Oui").changed() {
+                        if ui.checkbox(&mut hidden, "").changed() {
                             modified = true;
                         }
                         ui.end_row();
@@ -479,12 +480,23 @@ impl Inspector {
                         if !is_camera {
                             ui.label("Texture dans le losange");
                             if ui
-                                .checkbox(&mut fit_texture_to_diamond, "Ajuster")
+                                .checkbox(&mut fit_texture_to_diamond, "")
                                 .changed()
                             {
                                 modified = true;
                             }
                             ui.end_row();
+
+                            ui.label("Projection isométrique");
+                            if ui
+                                .checkbox(&mut isometric_depth, "")
+                                .on_hover_text("Incline l'image en parallélogramme pour aligner ses bords horizontaux sur un axe de la grille. Prend priorité sur l'ajustement au losange.")
+                                .changed()
+                            {
+                                modified = true;
+                            }
+                            ui.end_row();
+
                         }
 
                         if !is_camera {
@@ -548,7 +560,7 @@ impl Inspector {
                         .spacing([8.0, 4.0])
                         .show(ui, |ui| {
                             ui.label("Collisions");
-                            if ui.checkbox(&mut has_collisions, "Activées").changed() {
+                            if ui.checkbox(&mut has_collisions, "").changed() {
                                 modified = true;
                             }
                             ui.end_row();
@@ -663,6 +675,7 @@ impl Inspector {
                 obj.has_collisions = has_collisions;
                 obj.hidden = hidden;
                 obj.fit_texture_to_diamond = fit_texture_to_diamond;
+                obj.isometric_depth = isometric_depth;
                 obj.script = if script.trim().is_empty() {
                     None
                 } else {
@@ -756,6 +769,11 @@ impl Inspector {
                     | ui.checkbox(
                         &mut definition.defaults.fit_texture_to_diamond,
                         "Ajuster la texture au losange",
+                    )
+                    .changed()
+                    | ui.checkbox(
+                        &mut definition.defaults.isometric_depth,
+                        "Projection isométrique",
                     )
                     .changed();
                 edit.changed |= changed;
@@ -1066,7 +1084,7 @@ fn show_custom_property_editor(
             changed |= ui.add(egui::DragValue::new(value).speed(0.1)).changed();
         }
         (CustomPropertyKind::Boolean, PropValue::Bool(value)) => {
-            changed |= ui.checkbox(value, "Activée").changed();
+            changed |= ui.checkbox(value, "").changed();
         }
         (CustomPropertyKind::Scene, PropValue::Str(value)) => {
             let label = if value.is_empty() {

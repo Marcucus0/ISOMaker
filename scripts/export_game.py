@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import pathlib
 import shutil
 import subprocess
 import sys
-import os
 import tempfile
 import zipfile
 
@@ -28,7 +28,7 @@ def python_runtime_home(python_home: pathlib.Path | None) -> pathlib.Path:
         home = pathlib.Path(output).resolve(strict=True)
     if not (home / "Lib").is_dir():
         raise SystemExit(f"Runtime Python invalide : dossier Lib absent dans {home}")
-    if not list(home.glob("python3*.dll")):
+    if not list(home.glob("python3*.dll")) and not list(home.parent.glob("python3*.dll")):
         raise SystemExit(f"DLL Python introuvable dans {home}; utilisez --python-home")
     return home
 
@@ -52,7 +52,111 @@ def copy_python_runtime(home: pathlib.Path, destination: pathlib.Path) -> None:
         shutil.copy2(archive, destination / archive.name)
 
 
-def export(project_file: pathlib.Path, output: pathlib.Path, python_home: pathlib.Path | None) -> pathlib.Path:
+def project_resource_references(data: dict) -> list[tuple[str, str]]:
+    references: list[tuple[str, str]] = []
+
+    def add(label: str, value: object) -> None:
+        if isinstance(value, str) and value.strip():
+            references.append((label, value))
+
+    world = data.get("world", {})
+    add("script du monde", world.get("script"))
+    for scene in world.get("scenes", []):
+        for obj in scene.get("objects", {}).values():
+            if not isinstance(obj, dict):
+                continue
+            name = obj.get("name", "?")
+            add(f"texture de l'objet {name}", obj.get("asset_path"))
+            if not obj.get("asset_path"):
+                texture = (obj.get("properties") or {}).get("texture")
+                if isinstance(texture, dict):
+                    texture = texture.get("Str")
+                add(f"texture de l'objet {name}", texture)
+            add(f"script de l'objet {name}", obj.get("script"))
+
+    for tile in data.get("tile_definitions", []):
+        name = tile.get("name", "?")
+        add(f"texture de tuile {name}", tile.get("texture"))
+        add(f"son de pas de tuile {name}", tile.get("footstep_sound"))
+        for sound in tile.get("footstep_variants", []):
+            add(f"variante audio de tuile {name}", sound)
+
+    for object_type in data.get("object_types", []):
+        defaults = object_type.get("defaults") or {}
+        name = object_type.get("name", "?")
+        add(f"texture par défaut du type {name}", defaults.get("texture"))
+        add(f"script par défaut du type {name}", defaults.get("script"))
+    return references
+
+
+def validate_project_resources(package: pathlib.Path, project_name: str) -> None:
+    project_file = package / project_name
+    data = json.loads(project_file.read_text(encoding="utf-8"))
+    package_root = package.resolve()
+    missing: list[str] = []
+    references = project_resource_references(data)
+    tile_directory = package / pathlib.Path(project_name).stem / "tiles"
+    if tile_directory.is_dir():
+        for tile_file in tile_directory.glob("*.json"):
+            tile_data = json.loads(tile_file.read_text(encoding="utf-8"))
+            references.extend(
+                project_resource_references({"tile_definitions": [tile_data]})
+            )
+
+    # Les sons lancés par game.audio.create sont référencés dans le script,
+    # pas dans le JSON du projet. Vérifie les chemins littéraux détectables.
+    script_paths = [stored for label, stored in references if "script" in label]
+    for stored_script in script_paths:
+        normalized_script = stored_script.replace("\\", "/").lstrip("/")
+        script_file = (package / normalized_script).resolve()
+        if not script_file.is_relative_to(package_root) or not script_file.is_file():
+            continue
+        try:
+            syntax_tree = ast.parse(script_file.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeError):
+            continue
+        for node in ast.walk(syntax_tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            audio_create = (
+                node.func.attr == "create"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "audio"
+            )
+            if not audio_create:
+                continue
+            path_argument = node.args[1] if len(node.args) > 1 else next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "path"),
+                None,
+            )
+            if isinstance(path_argument, ast.Constant) and isinstance(path_argument.value, str):
+                references.append(
+                    (
+                        f"son créé dans {script_file.name} ligne {node.lineno}",
+                        path_argument.value,
+                    )
+                )
+
+    for label, stored in references:
+        normalized = stored.replace("\\", "/")
+        if normalized.startswith("/") and not pathlib.PureWindowsPath(normalized).drive:
+            normalized = normalized.lstrip("/")
+        requested = pathlib.Path(normalized)
+        if requested.is_absolute():
+            missing.append(f"{label}: chemin absolu non exportable ({stored})")
+            continue
+        resolved = (package / requested).resolve()
+        if not resolved.is_relative_to(package_root):
+            missing.append(f"{label}: chemin hors du projet ({stored})")
+        elif not resolved.is_file():
+            missing.append(f"{label}: fichier absent du projet ({stored})")
+    if missing:
+        raise RuntimeError(
+            "Ressources manquantes ou non exportables :\n- " + "\n- ".join(missing)
+        )
+
+
+def export(project_file: pathlib.Path, output: pathlib.Path, python_home: pathlib.Path | None, player_binary: pathlib.Path | None = None) -> pathlib.Path:
     project_file = project_file.resolve(strict=True)
     if project_file.suffix.lower() != ".isomaker":
         raise SystemExit("Le projet doit être un fichier .isomaker")
@@ -62,26 +166,29 @@ def export(project_file: pathlib.Path, output: pathlib.Path, python_home: pathli
         raise SystemExit(f"Fichier projet illisible ou invalide : {error}") from error
 
     runtime_home = python_runtime_home(python_home)
-    python_executable = runtime_home / ("python.exe" if os.name == "nt" else "bin/python3")
-    if not python_executable.is_file():
-        raise SystemExit(f"Interpréteur de compilation introuvable : {python_executable}")
-    cargo = shutil.which("cargo")
-    if cargo is None and os.name == "nt":
-        candidate = pathlib.Path.home() / ".cargo" / "bin" / "cargo.exe"
-        if candidate.is_file():
-            cargo = str(candidate)
-    if cargo is None:
-        raise SystemExit("cargo est introuvable; ajoutez Rust au PATH ou vérifiez l'installation de Cargo")
+    if player_binary is None:
+        python_executable = runtime_home / ("python.exe" if os.name == "nt" else "bin/python3")
+        if not python_executable.is_file():
+            raise SystemExit(f"Interpreteur de compilation introuvable : {python_executable}")
+        cargo = shutil.which("cargo")
+        if cargo is None and os.name == "nt":
+            candidate = pathlib.Path.home() / ".cargo" / "bin" / "cargo.exe"
+            if candidate.is_file():
+                cargo = str(candidate)
+        if cargo is None:
+            raise SystemExit("cargo est introuvable; ajoutez Rust au PATH ou verifiez l'installation de Cargo")
 
-    build_environment = os.environ.copy()
-    build_environment["PYO3_PYTHON"] = str(python_executable)
-    subprocess.run(
-        [cargo, "build", "--release", "-p", "editor", "--bin", "player"],
-        cwd=ROOT,
-        env=build_environment,
-        check=True,
-    )
-    player_exe = ROOT / "target" / "release" / "player.exe"
+        build_environment = os.environ.copy()
+        build_environment["PYO3_PYTHON"] = str(python_executable)
+        subprocess.run(
+            [cargo, "build", "--release", "-p", "editor", "--bin", "player"],
+            cwd=ROOT,
+            env=build_environment,
+            check=True,
+        )
+        player_exe = ROOT / "target" / "release" / "player.exe"
+    else:
+        player_exe = player_binary.resolve(strict=True)
     if not player_exe.is_file():
         raise SystemExit(f"Exécutable player absent après compilation : {player_exe}")
 
@@ -101,13 +208,17 @@ def export(project_file: pathlib.Path, output: pathlib.Path, python_home: pathli
             (package / stem).mkdir()
 
         copy_python_runtime(runtime_home, package / "python-runtime")
-        for dll in runtime_home.glob("python3*.dll"):
+        python_dlls = list(runtime_home.glob("python3*.dll")) or list(runtime_home.parent.glob("python3*.dll"))
+        for dll in python_dlls:
             shutil.copy2(dll, package / dll.name)
         for pattern in ("vcruntime*.dll", "msvcp*.dll", "ucrtbase.dll"):
-            for dll in runtime_home.glob(pattern):
+            runtime_dlls = list(runtime_home.glob(pattern)) or list(runtime_home.parent.glob(pattern))
+            for dll in runtime_dlls:
                 shutil.copy2(dll, package / dll.name)
         for license_name in ("LICENSE.txt", "LICENSE", "COPYING"):
             license_file = runtime_home / license_name
+            if not license_file.is_file():
+                license_file = runtime_home.parent / license_name
             if license_file.is_file():
                 shutil.copy2(license_file, package / ("PYTHON-" + license_name))
 
@@ -118,6 +229,7 @@ def export(project_file: pathlib.Path, output: pathlib.Path, python_home: pathli
             "Appuyez sur Échap pour quitter.\n",
             encoding="utf-8",
         )
+        validate_project_resources(package, project_file.name)
         temporary_zip = output.with_suffix(output.suffix + ".tmp")
         try:
             with zipfile.ZipFile(temporary_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
@@ -154,9 +266,10 @@ def main() -> int:
         "--python-home", type=pathlib.Path,
         help="Racine du Python partagé par PyO3 (par défaut : PYO3_PYTHON ou Python actif)",
     )
+    parser.add_argument("--player-bin", type=pathlib.Path, help="Lecteur deja compile (export sans Cargo)")
     args = parser.parse_args()
     output = args.output or (ROOT / "dist" / f"{args.project.stem}-windows.zip")
-    result = export(args.project, output, args.python_home)
+    result = export(args.project, output, args.python_home, args.player_bin)
     print(f"Export créé : {result}")
     return 0
 

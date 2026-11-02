@@ -1,6 +1,6 @@
 [package]
 name = "editor"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 
 [[bin]]
@@ -10,6 +10,10 @@ path = "src/main.rs"
 [[bin]]
 name = "player"
 path = "src/player.rs"
+
+[[bin]]
+name = "tile-editor"
+path = "src/tile_editor.rs"
 
 [dependencies]
 egui = { workspace = true }

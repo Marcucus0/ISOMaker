@@ -138,6 +138,7 @@ pub struct ObjectTypeDefaults {
     pub has_collisions: bool,
     pub hidden: bool,
     pub fit_texture_to_diamond: bool,
+    pub isometric_depth: bool,
     pub texture: Option<String>,
     pub script: Option<String>,
     pub footprint: TileSize,
@@ -151,6 +152,7 @@ impl Default for ObjectTypeDefaults {
             has_collisions: false,
             hidden: false,
             fit_texture_to_diamond: true,
+            isometric_depth: false,
             texture: None,
             script: None,
             footprint: TileSize::default(),
@@ -242,6 +244,9 @@ pub struct SceneObject {
     /// Déforme l'image dans le losange isométrique de la tuile.
     #[serde(default = "default_true")]
     pub fit_texture_to_diamond: bool,
+    /// Incline le sprite en parallélogramme selon un axe diagonal de la grille.
+    #[serde(default)]
+    pub isometric_depth: bool,
     /// Orientation isométrique.
     pub rotation: Rotation4,
     /// Propriétés personnalisées (accessibles depuis Python).
@@ -275,6 +280,7 @@ impl SceneObject {
             layer: Layer::default(),
             asset_path: None,
             fit_texture_to_diamond: true,
+            isometric_depth: false,
             rotation: Rotation4::default(),
             properties: HashMap::from([("texture".to_owned(), PropValue::Str(String::new()))]),
             script: None,

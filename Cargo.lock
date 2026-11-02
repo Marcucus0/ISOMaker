@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "assets"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "image",
@@ -711,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "editor"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "assets",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "engine"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "log",
@@ -2465,7 +2465,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "renderer"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2566,7 +2566,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "scripting"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "engine",
@@ -2575,6 +2575,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "uuid",
  "world",
 ]
 
@@ -3923,7 +3924,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "world"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "glam",

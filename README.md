@@ -7,13 +7,13 @@ ISOMaker est un éditeur et moteur de jeu 2D isométrique écrit en Rust. Il per
 ## État du projet
 
 <!-- README:GENERATED:START -->
-**Version actuelle :** `0.6.0`<br>
-**Dernière release :** `v0.6.0` · 2026-11-01<br>
-**Commits du dépôt :** 20<br>
-**Dernier commit :** `74dc715 (2026-11-01)`<br>
-**Code et documentation :** 34 fichiers Rust · 15 590 lignes Rust · 5 fichiers Python · 5 documents Markdown
+**Version actuelle :** `0.7.0`<br>
+**Dernière release :** `v0.7.0` · 2026-11-02<br>
+**Commits du dépôt :** 21<br>
+**Dernier commit :** `adcb155 (2026-11-02)`<br>
+**Code et documentation :** 35 fichiers Rust · 17 918 lignes Rust · 5 fichiers Python · 5 documents Markdown
 
-_Mis à jour le 2026-11-01._
+_Mis à jour le 2026-11-02._
 <!-- README:GENERATED:END -->
 
 Les chiffres ci-dessus sont générés depuis le dépôt. Pour les recalculer localement :
@@ -29,8 +29,12 @@ Prérequis : une installation récente de Rust (stable) et Python 3 pour les scr
 
 ```powershell
 cargo check --workspace
+cargo build -p editor --bins
 cargo run -p editor
 ```
+
+`cargo build -p editor --bins` construit aussi `tile-editor`, l'atelier de
+tuiles autonome lancé depuis **Fichier → Ouvrir l'atelier de tuiles**.
 
 Construire une version optimisée :
 

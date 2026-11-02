@@ -1,6 +1,6 @@
 //! Objet Python `GameContext` exposé aux scripts via PyO3.
 
-use crate::command::{GameCommand, HudAnchor, HudText, LogLevel};
+use crate::command::{GameCommand, HudAnchor, HudButton, HudSlider, HudText, LogLevel};
 use engine::{InputState, Key};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
@@ -13,6 +13,7 @@ use world::object::{PropValue, SceneObject};
 /// File de commandes partagée entre le contexte Python et le moteur Rust.
 pub type CommandQueue = Arc<Mutex<Vec<GameCommand>>>;
 pub type GlobalStore = Arc<Mutex<HashMap<String, serde_json::Value>>>;
+pub type AudioVolumeStore = Arc<Mutex<HashMap<String, f32>>>;
 
 /// Constante de touche typée, utilisée à la place d'une chaîne fragile.
 #[pyclass(name = "Key", frozen)]
@@ -349,6 +350,90 @@ pub struct PyGameUI {
 
 #[pymethods]
 impl PyGameUI {
+    /// Crée ou remplace un bouton interactif du HUD.
+    #[pyo3(signature = (id, label, x=0.0, y=0.0, width=180.0, height=42.0, anchor=None, visibility=true))]
+    fn set_button(
+        &self,
+        id: &str,
+        label: &str,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        anchor: Option<PyRef<'_, PyUIAnchor>>,
+        visibility: bool,
+    ) -> PyResult<()> {
+        if id.is_empty()
+            || ![x, y, width, height].iter().all(|value| value.is_finite())
+            || width <= 0.0
+            || height <= 0.0
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Le bouton doit avoir un identifiant et des dimensions positives valides.",
+            ));
+        }
+        self.push(GameCommand::SetHudButton(HudButton {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            x,
+            y,
+            width: width.clamp(24.0, 1200.0),
+            height: height.clamp(20.0, 300.0),
+            anchor: anchor
+                .map(|value| value.anchor)
+                .unwrap_or(HudAnchor::TopLeft),
+            visible: visibility,
+        }))
+    }
+
+    fn remove_button(&self, id: &str) -> PyResult<()> {
+        self.push(GameCommand::RemoveHudButton { id: id.to_owned() })
+    }
+
+    /// Crée ou remplace un curseur interactif ; sa valeur est envoyée à `_on_ui_slider`.
+    #[pyo3(signature = (id, label, x=0.0, y=0.0, width=240.0, value=1.0, minimum=0.0, maximum=1.0, anchor=None))]
+    fn set_slider(
+        &self,
+        id: &str,
+        label: &str,
+        x: f32,
+        y: f32,
+        width: f32,
+        value: f32,
+        minimum: f32,
+        maximum: f32,
+        anchor: Option<PyRef<'_, PyUIAnchor>>,
+    ) -> PyResult<()> {
+        if id.is_empty()
+            || ![x, y, width, value, minimum, maximum]
+                .iter()
+                .all(|v| v.is_finite())
+            || width <= 0.0
+            || minimum >= maximum
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Le curseur doit avoir un identifiant, une plage et des dimensions valides.",
+            ));
+        }
+        self.push(GameCommand::SetHudSlider(HudSlider {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            x,
+            y,
+            width: width.clamp(60.0, 1200.0),
+            value: value.clamp(minimum, maximum),
+            min: minimum,
+            max: maximum,
+            anchor: anchor
+                .map(|value| value.anchor)
+                .unwrap_or(HudAnchor::TopLeft),
+        }))
+    }
+
+    fn remove_slider(&self, id: &str) -> PyResult<()> {
+        self.push(GameCommand::RemoveHudSlider { id: id.to_owned() })
+    }
+
     /// Crée ou met à jour un texte identifié dans le HUD.
     #[pyo3(signature = (id, text, x=0.0, y=0.0, anchor=None, font_size=24.0, color=None, visible=true, background_color=None))]
     fn set_text(
@@ -477,6 +562,20 @@ impl PyGameUI {
         Ok(())
     }
 
+    /// Modifie la visibilite d'un texte HUD existant.
+    fn update_visibility(&self, id: &str, visible: bool) -> PyResult<()> {
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
+            .push(GameCommand::UpdateHudVisibility {
+                id: id.to_owned(),
+                visible,
+            });
+        Ok(())
+    }
+
     /// Fait diminuer progressivement l'opacité d'un texte, puis le supprime.
     fn fade_out(&self, id: &str, duration: f32) -> PyResult<()> {
         if !duration.is_finite() || duration <= 0.0 {
@@ -523,6 +622,143 @@ impl PyGameUI {
                 pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
             })?
             .push(GameCommand::RemoveHudText { id: id.to_owned() });
+        Ok(())
+    }
+}
+
+impl PyGameUI {
+    fn push(&self, command: GameCommand) -> PyResult<()> {
+        self.queue
+            .lock()
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err("Verrou de commande inaccessible")
+            })?
+            .push(command);
+        Ok(())
+    }
+}
+
+#[pyclass(name = "GameAudio")]
+pub struct PyGameAudio {
+    queue: CommandQueue,
+    volumes: AudioVolumeStore,
+    script_source: String,
+}
+
+#[pymethods]
+impl PyGameAudio {
+    /// Crée ou remplace une source audio identifiée pour ce script.
+    fn create(&self, id: &str, path: &str) -> PyResult<()> {
+        if id.trim().is_empty() || path.trim().is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "L'identifiant et le chemin audio ne peuvent pas être vides.",
+            ));
+        }
+        self.push(GameCommand::CreateSound {
+            id: id.to_owned(),
+            path: path.to_owned(),
+            source: self.script_source.clone(),
+        })?;
+        self.volumes
+            .lock()
+            .map_err(|error| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Verrou du volume audio inaccessible : {error}"
+                ))
+            })?
+            .remove(id);
+        Ok(())
+    }
+
+    /// Joue une source créée avec `create` et renvoie son identifiant.
+    #[pyo3(signature = (id, volume=1.0, looping=false))]
+    fn play(&self, id: &str, volume: f32, looping: bool) -> PyResult<String> {
+        if id.trim().is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "L'identifiant audio ne peut pas être vide.",
+            ));
+        }
+        if !volume.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Le volume du son doit être un nombre fini.",
+            ));
+        }
+        let volume = volume.clamp(0.0, 1.0);
+        self.push(GameCommand::PlaySound {
+            id: id.to_owned(),
+            volume,
+            looping,
+            source: self.script_source.clone(),
+        })?;
+        self.remember_volume(id, volume)?;
+        Ok(id.to_owned())
+    }
+
+    /// Arrête le son identifié par le handle retourné par `play`.
+    fn stop(&self, id: &str) -> PyResult<()> {
+        self.push(GameCommand::StopSound { id: id.to_owned() })
+    }
+
+    /// Change le volume d'un son entre 0.0 et 1.0.
+    fn set_volume(&self, id: &str, volume: f32) -> PyResult<()> {
+        if !volume.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Le volume du son doit être un nombre fini.",
+            ));
+        }
+        let volume = volume.clamp(0.0, 1.0);
+        self.push(GameCommand::SetSoundVolume {
+            id: id.to_owned(),
+            volume,
+        })?;
+        self.remember_volume(id, volume)
+    }
+
+    /// Renvoie le dernier volume demandé, ou None si ce son n'a pas encore été joué/configuré.
+    fn get_volume(&self, id: &str) -> PyResult<Option<f32>> {
+        self.volumes
+            .lock()
+            .map(|volumes| volumes.get(id).copied())
+            .map_err(|error| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Verrou du volume audio inaccessible : {error}"
+                ))
+            })
+    }
+
+    /// Suspend tous les sons du jeu sans interrompre leur lecture.
+    fn pause(&self) -> PyResult<()> {
+        self.push(GameCommand::PauseAudio)
+    }
+
+    /// Reprend les sons suspendus par `game.audio.pause()`.
+    fn resume(&self) -> PyResult<()> {
+        self.push(GameCommand::ResumeAudio)
+    }
+}
+
+impl PyGameAudio {
+    fn remember_volume(&self, id: &str, volume: f32) -> PyResult<()> {
+        self.volumes
+            .lock()
+            .map_err(|error| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Verrou du volume audio inaccessible : {error}"
+                ))
+            })?
+            .insert(id.to_owned(), volume);
+        Ok(())
+    }
+
+    fn push(&self, command: GameCommand) -> PyResult<()> {
+        self.queue
+            .lock()
+            .map_err(|error| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Verrou de commande inaccessible : {error}"
+                ))
+            })?
+            .push(command);
         Ok(())
     }
 }
@@ -636,6 +872,10 @@ impl PyGameObject {
         self.object.fit_texture_to_diamond
     }
     #[getter]
+    fn isometric_depth(&self) -> bool {
+        self.object.isometric_depth
+    }
+    #[getter]
     fn camera_zoom(&self) -> f32 {
         self.object.camera_zoom
     }
@@ -703,6 +943,7 @@ pub struct PyGameContext {
     scene_objects: Arc<Vec<SceneObject>>,
     scenes: Arc<Vec<SceneSnapshot>>,
     globals: GlobalStore,
+    audio_volumes: AudioVolumeStore,
     input: InputState,
     script_source: String,
 }
@@ -717,6 +958,7 @@ impl PyGameContext {
         scene_objects: Arc<Vec<SceneObject>>,
         scenes: Arc<Vec<SceneSnapshot>>,
         globals: GlobalStore,
+        audio_volumes: AudioVolumeStore,
         input: InputState,
         script_source: String,
     ) -> Self {
@@ -729,6 +971,7 @@ impl PyGameContext {
             scene_objects,
             scenes,
             globals,
+            audio_volumes,
             input,
             script_source,
         }
@@ -770,6 +1013,15 @@ impl PyGameContext {
     }
 
     #[getter]
+    fn audio(&self) -> PyGameAudio {
+        PyGameAudio {
+            queue: Arc::clone(&self.queue),
+            volumes: Arc::clone(&self.audio_volumes),
+            script_source: self.script_source.clone(),
+        }
+    }
+
+    #[getter]
     fn ui_anchor(&self) -> PyUIAnchorSet {
         PyUIAnchorSet
     }
@@ -792,6 +1044,21 @@ impl PyGameContext {
     /// Alias de `key_just_released`, pour une API clavier symétrique.
     fn key_released(&self, key: PyRef<'_, PyKey>) -> bool {
         self.input.is_key_just_released(key.key)
+    }
+
+    /// Met en pause la simulation sans quitter le mode Lecture.
+    fn pause(&self) -> PyResult<()> {
+        self.push(GameCommand::Pause)
+    }
+
+    /// Reprend une simulation mise en pause.
+    fn resume(&self) -> PyResult<()> {
+        self.push(GameCommand::Resume)
+    }
+
+    /// Arrete la lecture et revient a l'editeur en restaurant la scene.
+    fn stop(&self) -> PyResult<()> {
+        self.push(GameCommand::Quit)
     }
 
     /// Temps écoulé depuis le dernier frame, en secondes.
@@ -885,6 +1152,12 @@ impl PyGameContext {
         Ok(self.require_self_object()?.fit_texture_to_diamond)
     }
 
+
+    #[getter]
+    fn isometric_depth(&self) -> PyResult<bool> {
+        Ok(self.require_self_object()?.isometric_depth)
+    }
+
     #[getter]
     fn rotation(&self) -> PyResult<String> {
         Ok(format!("{:?}", self.require_self_object()?.rotation))
@@ -947,6 +1220,7 @@ impl PyGameContext {
             "has_collisions" => serde_json::Value::Bool(object.has_collisions),
             "hidden" => serde_json::Value::Bool(object.hidden),
             "fit_texture_to_diamond" => serde_json::Value::Bool(object.fit_texture_to_diamond),
+            "isometric_depth" => serde_json::Value::Bool(object.isometric_depth),
             "rotation" => serde_json::Value::String(format!("{:?}", object.rotation)),
             "layer" => serde_json::Value::String(format!("{:?}", object.layer)),
             "texture" | "asset_path" => object
@@ -1186,6 +1460,7 @@ fn object_to_json_value(object: &SceneObject, key: &str) -> serde_json::Value {
         "has_collisions" => serde_json::Value::Bool(object.has_collisions),
         "hidden" => serde_json::Value::Bool(object.hidden),
         "fit_texture_to_diamond" => serde_json::Value::Bool(object.fit_texture_to_diamond),
+        "isometric_depth" => serde_json::Value::Bool(object.isometric_depth),
         "rotation" => serde_json::Value::String(format!("{:?}", object.rotation)),
         "layer" => serde_json::Value::String(format!("{:?}", object.layer)),
         "texture" | "asset_path" => object

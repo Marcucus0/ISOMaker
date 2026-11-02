@@ -48,6 +48,8 @@ pub struct EditorState {
     /// Paires zone/objet qui se chevauchaient lors de la dernière frame.
     area_overlaps: HashSet<(ObjectId, ObjectId)>,
     hud_texts: HashMap<String, scripting::command::HudText>,
+    hud_buttons: HashMap<String, scripting::command::HudButton>,
+    hud_sliders: HashMap<String, scripting::command::HudSlider>,
     hud_fades: HashMap<String, HudFade>,
     /// Messages de log accumulés.
     pub log_messages: VecDeque<LogEntry>,
@@ -56,6 +58,7 @@ pub struct EditorState {
     redo_history: Vec<HistoryEntry>,
     next_log_id: u64,
     pending_footstep_sounds: Vec<(String, f32)>,
+    pending_audio_commands: Vec<GameCommand>,
 }
 
 struct HudFade {
@@ -102,12 +105,15 @@ impl EditorState {
             scene_stack: Vec::new(),
             area_overlaps: HashSet::new(),
             hud_texts: HashMap::new(),
+            hud_buttons: HashMap::new(),
+            hud_sliders: HashMap::new(),
             hud_fades: HashMap::new(),
             log_messages: VecDeque::new(),
             undo_history: Vec::new(),
             redo_history: Vec::new(),
             next_log_id: 1,
             pending_footstep_sounds: Vec::new(),
+            pending_audio_commands: Vec::new(),
         }
     }
 
@@ -261,7 +267,10 @@ impl EditorState {
         self.area_overlaps.clear();
         self.scene_stack.clear();
         self.pending_footstep_sounds.clear();
+        self.pending_audio_commands.clear();
         self.hud_texts.clear();
+        self.hud_buttons.clear();
+        self.hud_sliders.clear();
         self.hud_fades.clear();
         if !has_active_session {
             return;
@@ -503,6 +512,14 @@ impl EditorState {
                         existing.color = color;
                     }
                 }
+                GameCommand::UpdateHudVisibility { id, visible } => {
+                    if let Some(existing) = self.hud_texts.get_mut(&id) {
+                        existing.visible = visible;
+                    }
+                    if let Some(existing) = self.hud_buttons.get_mut(&id) {
+                        existing.visible = visible;
+                    }
+                }
                 GameCommand::FadeOutHudText { id, duration } => {
                     if let Some(existing) = self.hud_texts.get(&id) {
                         let initial_alpha = existing.color[3];
@@ -549,6 +566,50 @@ impl EditorState {
                 GameCommand::RemoveHudText { id } => {
                     self.hud_fades.remove(&id);
                     self.hud_texts.remove(&id);
+                }
+                GameCommand::SetHudButton(button) => {
+                    self.hud_buttons.insert(button.id.clone(), button);
+                }
+                GameCommand::RemoveHudButton { id } => {
+                    self.hud_buttons.remove(&id);
+                }
+                GameCommand::SetHudSlider(slider) => {
+                    self.hud_sliders.insert(slider.id.clone(), slider);
+                }
+                GameCommand::RemoveHudSlider { id } => {
+                    self.hud_sliders.remove(&id);
+                }
+                GameCommand::Pause => {
+                    self.game_loop.pause();
+                }
+                GameCommand::Resume => {
+                    self.game_loop.resume();
+                }
+                GameCommand::CreateSound { id, path, source } => self
+                    .pending_audio_commands
+                    .push(GameCommand::CreateSound { id, path, source }),
+                GameCommand::PlaySound {
+                    id,
+                    volume,
+                    looping,
+                    source,
+                } => self.pending_audio_commands.push(GameCommand::PlaySound {
+                    id,
+                    volume,
+                    looping,
+                    source,
+                }),
+                GameCommand::StopSound { id } => self
+                    .pending_audio_commands
+                    .push(GameCommand::StopSound { id }),
+                GameCommand::SetSoundVolume { id, volume } => self
+                    .pending_audio_commands
+                    .push(GameCommand::SetSoundVolume { id, volume }),
+                GameCommand::PauseAudio => {
+                    self.pending_audio_commands.push(GameCommand::PauseAudio)
+                }
+                GameCommand::ResumeAudio => {
+                    self.pending_audio_commands.push(GameCommand::ResumeAudio)
                 }
                 GameCommand::Spawn {
                     name,
@@ -740,6 +801,7 @@ impl EditorState {
                 }
                 GameCommand::Quit => {
                     self.stop();
+                    break;
                 }
             }
         }
@@ -824,7 +886,12 @@ impl EditorState {
     }
 
     fn push_log(&mut self, level: log::Level, msg: String) {
-        log::log!(level, "[Script] {}", msg);
+        // Les informations restent disponibles dans le panneau de logs. Le
+        // terminal ne reçoit que les avertissements et erreurs pour éviter
+        // d'y répéter chaque transfert ou chargement de scène demandé par un script.
+        if matches!(level, log::Level::Warn | log::Level::Error) {
+            log::log!(level, "[Script] {}", msg);
+        }
         self.store_log(level, msg);
     }
 
@@ -1200,6 +1267,10 @@ fn apply_script_object_property(
             object.fit_texture_to_diamond = value.as_bool().ok_or("attend True ou False")?;
             Ok(())
         }
+        "isometric_depth" => {
+            object.isometric_depth = value.as_bool().ok_or("attend True ou False")?;
+            Ok(())
+        }
         "rotation" => {
             object.rotation = match value.as_str().ok_or("attend North, East, South ou West")? {
                 "North" => Rotation4::North,
@@ -1308,12 +1379,58 @@ pub struct EditorApp {
 struct FootstepAudio {
     sink: Option<rodio::MixerDeviceSink>,
     unavailable: bool,
+    gameplay_paused: bool,
+    audio_api_paused: bool,
     players: Vec<Player>,
+    script_sources: HashMap<String, std::path::PathBuf>,
+    script_players: HashMap<String, Player>,
     previews: HashMap<String, Player>,
 }
 
 impl FootstepAudio {
     fn play(&mut self, path: &std::path::Path, volume: f32) -> anyhow::Result<()> {
+        self.ensure_sink()?;
+        let source = Decoder::try_from(std::fs::File::open(path)?)?;
+        let player = Player::connect_new(self.sink.as_ref().unwrap().mixer());
+        player.set_volume(volume.clamp(0.0, 1.0));
+        player.append(source);
+        if self.is_paused() {
+            player.pause();
+        }
+        self.players.retain(|player| !player.empty());
+        self.players.push(player);
+        Ok(())
+    }
+
+    fn create_script_sound(&mut self, id: String, path: std::path::PathBuf) {
+        self.stop_script_sound(&id);
+        self.script_sources.insert(id, path);
+    }
+
+    fn play_script_sound(&mut self, id: String, volume: f32, looping: bool) -> anyhow::Result<()> {
+        let path = self
+            .script_sources
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Aucune source audio nommée `{id}` n'a été créée"))?;
+        self.stop_script_sound(&id);
+        self.ensure_sink()?;
+        let source = Decoder::try_from(std::fs::File::open(path)?)?;
+        let player = Player::connect_new(self.sink.as_ref().unwrap().mixer());
+        player.set_volume(volume.clamp(0.0, 1.0));
+        if looping {
+            player.append(rodio::Source::repeat_infinite(source));
+        } else {
+            player.append(source);
+        }
+        if self.is_paused() {
+            player.pause();
+        }
+        self.script_players.insert(id, player);
+        Ok(())
+    }
+
+    fn ensure_sink(&mut self) -> anyhow::Result<()> {
         if self.unavailable {
             anyhow::bail!("Aucune sortie audio disponible")
         }
@@ -1326,20 +1443,69 @@ impl FootstepAudio {
                 }
             }
         }
-        let source = Decoder::try_from(std::fs::File::open(path)?)?;
-        let player = Player::connect_new(self.sink.as_ref().unwrap().mixer());
-        player.set_volume(volume.clamp(0.0, 1.0));
-        player.append(source);
-        self.players.retain(|player| !player.empty());
-        self.players.push(player);
         Ok(())
     }
 
+    fn stop_script_sound(&mut self, id: &str) {
+        if let Some(player) = self.script_players.remove(id) {
+            player.stop();
+        }
+    }
+
+    fn set_script_sound_volume(&mut self, id: &str, volume: f32) {
+        if let Some(player) = self.script_players.get(id) {
+            player.set_volume(volume.clamp(0.0, 1.0));
+        }
+    }
+
+    fn cleanup_finished_script_sounds(&mut self) {
+        self.script_players.retain(|_, player| !player.empty());
+    }
+
+    fn set_gameplay_paused(&mut self, paused: bool) {
+        self.gameplay_paused = paused;
+        self.sync_player_paused_state();
+    }
+
+    fn set_audio_api_paused(&mut self, paused: bool) {
+        self.audio_api_paused = paused;
+        self.sync_player_paused_state();
+    }
+
+    fn is_paused(&self) -> bool {
+        self.gameplay_paused || self.audio_api_paused
+    }
+
+    fn sync_player_paused_state(&mut self) {
+        let paused = self.is_paused();
+        for player in &self.players {
+            if paused {
+                player.pause();
+            } else {
+                player.play();
+            }
+        }
+        for player in self.script_players.values() {
+            if paused {
+                player.pause();
+            } else {
+                player.play();
+            }
+        }
+    }
+
     fn stop_all(&mut self) {
+        self.gameplay_paused = false;
+        self.audio_api_paused = false;
         for player in &self.players {
             player.stop();
         }
         self.players.clear();
+        for player in self.script_players.values() {
+            player.stop();
+        }
+        self.script_players.clear();
+        self.script_sources.clear();
         for player in self.previews.values() {
             player.stop();
         }
@@ -1590,15 +1756,13 @@ impl EditorApp {
         {
             self.audio_output.stop_all();
         }
+        self.sync_gameplay_audio_pause();
         for (sound, volume) in std::mem::take(&mut self.state.pending_footstep_sounds) {
-            let stored = std::path::Path::new(&sound);
-            let path = if stored.is_absolute() {
-                stored.to_owned()
-            } else if let Some(project_file) = self.project_path.as_deref() {
-                project_file
+            let path = if let Some(project_file) = self.project_path.as_deref() {
+                let root = project_file
                     .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."))
-                    .join(stored)
+                    .unwrap_or_else(|| std::path::Path::new("."));
+                resolve_stored_project_path(root, &sound)
             } else {
                 std::path::PathBuf::from(&sound)
             };
@@ -1609,6 +1773,44 @@ impl EditorApp {
                 );
             }
         }
+        for command in std::mem::take(&mut self.state.pending_audio_commands) {
+            match command {
+                GameCommand::CreateSound { id, path, source } => {
+                    match self.resolve_runtime_audio_path(&path) {
+                        Ok(resolved) => self.audio_output.create_script_sound(id, resolved),
+                        Err(error) => self.state.push_script_log(
+                            log::Level::Warn,
+                            &source,
+                            format!("Création de la source audio `{id}` ({path}) : {error}"),
+                        ),
+                    }
+                }
+                GameCommand::PlaySound {
+                    id,
+                    volume,
+                    looping,
+                    source,
+                } => {
+                    if let Err(error) = self.audio_output.play_script_sound(
+                        id.clone(), volume, looping,
+                    ) {
+                        self.state.push_script_log(
+                            log::Level::Warn,
+                            &source,
+                            format!("Lecture audio `{id}` : {error}"),
+                        );
+                    }
+                }
+                GameCommand::StopSound { id } => self.audio_output.stop_script_sound(&id),
+                GameCommand::SetSoundVolume { id, volume } => {
+                    self.audio_output.set_script_sound_volume(&id, volume);
+                }
+                GameCommand::PauseAudio => self.audio_output.set_audio_api_paused(true),
+                GameCommand::ResumeAudio => self.audio_output.set_audio_api_paused(false),
+                _ => {}
+            }
+        }
+        self.audio_output.cleanup_finished_script_sounds();
         if scene_before_update != self.state.project.world.active_scene_index {
             self.runtime_camera = self.state.active_scene().main_camera;
             self.runtime_camera_position = None;
@@ -1620,6 +1822,13 @@ impl EditorApp {
 
         if self.player_mode {
             self.update_player_view(ctx, delta_time);
+            self.sync_gameplay_audio_pause();
+            if mode_before_update != EngineMode::Editor
+                && self.state.game_loop.mode == EngineMode::Editor
+            {
+                self.audio_output.stop_all();
+                self.exit_requested = true;
+            }
             return;
         }
 
@@ -1629,9 +1838,20 @@ impl EditorApp {
         self.scene_view.paint_tile_type = self.left_panel.selected_tile_type;
 
         self.draw_ui(ctx, delta_time);
+        self.sync_gameplay_audio_pause();
+        if mode_before_update != EngineMode::Editor
+            && self.state.game_loop.mode == EngineMode::Editor
+        {
+            self.audio_output.stop_all();
+        }
 
         // Récupère la sélection de la vue scène.
         self.state.selected = self.scene_view.selected_object;
+    }
+
+    fn sync_gameplay_audio_pause(&mut self) {
+        self.audio_output
+            .set_gameplay_paused(self.state.game_loop.mode == EngineMode::Paused);
     }
 
     fn poll_export_job(&mut self) {
@@ -1666,9 +1886,6 @@ impl EditorApp {
     }
 
     fn update_player_view(&mut self, ctx: &Context, delta_time: f32) {
-        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-            self.exit_requested = true;
-        }
         let camera_pose = self.runtime_camera.and_then(|id| {
             self.state
                 .active_scene()
@@ -1711,6 +1928,10 @@ impl EditorApp {
             .map(std::path::Path::to_path_buf)
             .unwrap_or_default();
         let hud_texts = self.state.hud_texts.values().cloned().collect::<Vec<_>>();
+        let mut hud_buttons = self.state.hud_buttons.values().cloned().collect::<Vec<_>>();
+        hud_buttons.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut hud_sliders = self.state.hud_sliders.values().cloned().collect::<Vec<_>>();
+        hud_sliders.sort_by(|left, right| left.id.cmp(&right.id));
         egui::CentralPanel::default()
             .frame(egui::Frame::default())
             .show(ctx, |ui| {
@@ -1728,11 +1949,69 @@ impl EditorApp {
                     false,
                     &mut self.runtime_camera,
                     &hud_texts,
+                    &hud_buttons,
+                    &hud_sliders,
                 );
             });
-        if let Some(object_id) = self.scene_view.take_clicked_object() {
+        let hud_interacted = self.dispatch_hud_interactions();
+        if let Some(object_id) = self
+            .scene_view
+            .take_clicked_object()
+            .filter(|_| !hud_interacted)
+        {
             self.state.click_object(object_id);
         }
+    }
+
+    fn dispatch_hud_interactions(&mut self) -> bool {
+        let interacted = self.scene_view.take_hud_interaction();
+        let buttons = self.scene_view.take_hud_button_clicks();
+        let sliders = self.scene_view.take_hud_slider_changes();
+        for id in buttons {
+            let objects = self
+                .state
+                .active_scene()
+                .objects
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            match self
+                .state
+                .script_runtime
+                .call_world_ui_button(&id, &objects, &self.state.input)
+            {
+                Ok(commands) => self.state.apply_commands(commands, false),
+                Err(error) => self
+                    .state
+                    .push_log(log::Level::Error, format!("_on_ui_button : {error}")),
+            }
+        }
+        for (id, value) in sliders {
+            // Garder la valeur saisie dans l'état du HUD. Sans cela, le slider
+            // est redessiné avec la valeur initiale de son dernier set_slider.
+            if let Some(slider) = self.state.hud_sliders.get_mut(&id) {
+                slider.value = value.clamp(slider.min, slider.max);
+            }
+            let objects = self
+                .state
+                .active_scene()
+                .objects
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            match self.state.script_runtime.call_world_ui_slider(
+                &id,
+                value,
+                &objects,
+                &self.state.input,
+            ) {
+                Ok(commands) => self.state.apply_commands(commands, false),
+                Err(error) => self
+                    .state
+                    .push_log(log::Level::Error, format!("_on_ui_slider : {error}")),
+            }
+        }
+        interacted
     }
 
     /// Capture Ctrl+C/Ctrl+V avant qu'egui-winit les traite comme des raccourcis
@@ -1953,6 +2232,42 @@ impl EditorApp {
 
         if self.toolbar.export_requested && self.state.game_loop.is_editor() {
             self.export_current_project();
+        }
+        if self.toolbar.tile_editor_requested && self.state.game_loop.is_editor() {
+            let editor_executable = std::env::current_exe();
+            match editor_executable {
+                Ok(editor_executable) => {
+                    let tile_editor_executable = editor_executable.with_file_name(if cfg!(windows) {
+                        "tile-editor.exe"
+                    } else {
+                        "tile-editor"
+                    });
+                    if !tile_editor_executable.is_file() {
+                        self.state.push_log(
+                            log::Level::Error,
+                            format!(
+                                "Atelier de tuiles introuvable : {}. Construis-le avec `cargo build -p editor --bin tile-editor`.",
+                                tile_editor_executable.display()
+                            ),
+                        );
+                    } else {
+                        let mut command = std::process::Command::new(tile_editor_executable);
+                        if let Some(project_file) = &self.project_path {
+                            command.arg(project_file);
+                        }
+                        if let Err(error) = command.spawn() {
+                            self.state.push_log(
+                                log::Level::Error,
+                                format!("Lancement de l'atelier de tuiles : {error}"),
+                            );
+                        }
+                    }
+                }
+                Err(error) => self.state.push_log(
+                    log::Level::Error,
+                    format!("Localisation de l'exécutable de l'éditeur : {error}"),
+                ),
+            }
         }
 
         if self.toolbar.world_settings_requested {
@@ -2572,6 +2887,7 @@ impl EditorApp {
                                 object.hidden = definition.defaults.hidden;
                                 object.fit_texture_to_diamond =
                                     definition.defaults.fit_texture_to_diamond;
+                                object.isometric_depth = definition.defaults.isometric_depth;
                                 object.footprint = definition.defaults.footprint;
                                 object.rotation = definition.defaults.rotation;
                                 object.layer = definition.defaults.layer;
@@ -3042,6 +3358,10 @@ impl EditorApp {
             }
         }
         let hud_texts = self.state.hud_texts.values().cloned().collect::<Vec<_>>();
+        let mut hud_buttons = self.state.hud_buttons.values().cloned().collect::<Vec<_>>();
+        hud_buttons.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut hud_sliders = self.state.hud_sliders.values().cloned().collect::<Vec<_>>();
+        hud_sliders.sort_by(|left, right| left.id.cmp(&right.id));
         egui::CentralPanel::default().show(ctx, |ui| {
             self.scene_view.show(
                 ui,
@@ -3057,9 +3377,16 @@ impl EditorApp {
                 show_camera_selector,
                 &mut self.runtime_camera,
                 &hud_texts,
+                &hud_buttons,
+                &hud_sliders,
             );
         });
-        if let Some(object_id) = self.scene_view.take_clicked_object() {
+        let hud_interacted = self.dispatch_hud_interactions();
+        if let Some(object_id) = self
+            .scene_view
+            .take_clicked_object()
+            .filter(|_| !hud_interacted)
+        {
             self.state.click_object(object_id);
         }
         if self.pending_deletion.is_none() {
@@ -3490,12 +3817,7 @@ impl EditorApp {
         let mut copied_sources = std::collections::HashMap::<std::path::PathBuf, String>::new();
         let mut texture_updates = Vec::new();
         for (scene_index, object_id, stored_path) in texture_references {
-            let stored = std::path::Path::new(&stored_path);
-            let source_path = if stored.is_absolute() {
-                stored.to_owned()
-            } else {
-                source_root.join(stored)
-            };
+            let source_path = resolve_stored_project_path(&source_root, &stored_path);
             let source = match source_path.canonicalize() {
                 Ok(source) => source,
                 Err(error) => {
@@ -3550,12 +3872,7 @@ impl EditorApp {
             .collect();
         let mut tile_texture_updates = Vec::new();
         for (tile_id, stored_path) in tile_texture_references {
-            let stored = std::path::Path::new(&stored_path);
-            let source_path = if stored.is_absolute() {
-                stored.to_owned()
-            } else {
-                source_root.join(stored)
-            };
+            let source_path = resolve_stored_project_path(&source_root, &stored_path);
             let source = match source_path.canonicalize() {
                 Ok(source) => source,
                 Err(error) => {
@@ -3615,12 +3932,7 @@ impl EditorApp {
             .collect();
         let mut tile_sound_updates = Vec::new();
         for (tile_id, slot, stored_path) in tile_sound_references {
-            let stored = std::path::Path::new(&stored_path);
-            let source_path = if stored.is_absolute() {
-                stored.to_owned()
-            } else {
-                source_root.join(stored)
-            };
+            let source_path = resolve_stored_project_path(&source_root, &stored_path);
             let source = match source_path.canonicalize() {
                 Ok(source) => source,
                 Err(error) => {
@@ -3667,6 +3979,69 @@ impl EditorApp {
             }
         }
 
+        // Les valeurs par défaut d'un type peuvent être utilisées par des
+        // instances créées pendant la lecture. Elles doivent donc voyager avec
+        // le projet au même titre que les textures des instances existantes.
+        let type_texture_references: Vec<(usize, String)> = self
+            .state
+            .project
+            .object_types
+            .iter()
+            .enumerate()
+            .filter_map(|(index, definition)| {
+                definition
+                    .defaults
+                    .texture
+                    .as_ref()
+                    .filter(|path| !path.trim().is_empty())
+                    .map(|path| (index, path.clone()))
+            })
+            .collect();
+        let mut type_texture_updates = Vec::new();
+        for (type_index, stored_path) in type_texture_references {
+            let source_path = resolve_stored_project_path(&source_root, &stored_path);
+            let fallback = std::path::Path::new(&stored_path)
+                .file_name()
+                .map(|name| target_image_dir.join(name));
+            let source = match source_path
+                .canonicalize()
+                .or_else(|_| fallback.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?.canonicalize())
+            {
+                Ok(source) => source,
+                Err(error) => {
+                    self.state.push_log(
+                        log::Level::Warn,
+                        format!("Texture par défaut de type manquante `{stored_path}` : {error}"),
+                    );
+                    continue;
+                }
+            };
+            let relative = if let Some(relative) = copied_sources.get(&source) {
+                relative.clone()
+            } else if let Ok(within_images) = source.strip_prefix(&target_image_dir) {
+                let relative = image_prefix
+                    .join(within_images)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                copied_sources.insert(source, relative.clone());
+                relative
+            } else {
+                let destination = copy_asset_to_directory(&source, &target_image_dir)?;
+                let relative = image_prefix
+                    .join(destination.file_name().unwrap_or_default())
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                copied_sources.insert(source, relative.clone());
+                relative
+            };
+            type_texture_updates.push((type_index, relative));
+        }
+        for (type_index, relative) in type_texture_updates {
+            self.state.project.object_types[type_index]
+                .defaults
+                .texture = Some(relative);
+        }
+
         let script_references: Vec<(usize, ObjectId, String)> = self
             .state
             .project
@@ -3696,12 +4071,7 @@ impl EditorApp {
             .clone()
             .filter(|value| !value.trim().is_empty())
         {
-            let stored = std::path::Path::new(&stored_path);
-            let source_path = if stored.is_absolute() {
-                stored.to_owned()
-            } else {
-                source_root.join(stored)
-            };
+            let source_path = resolve_stored_project_path(&source_root, &stored_path);
             match source_path.canonicalize() {
                 Ok(source) => {
                     let relative = if let Ok(within_scripts) =
@@ -3721,14 +4091,58 @@ impl EditorApp {
                 ),
             }
         }
+
+        let type_script_references: Vec<(usize, String)> = self
+            .state
+            .project
+            .object_types
+            .iter()
+            .enumerate()
+            .filter_map(|(index, definition)| {
+                definition
+                    .defaults
+                    .script
+                    .as_ref()
+                    .filter(|path| !path.trim().is_empty())
+                    .map(|path| (index, path.clone()))
+            })
+            .collect();
+        let mut type_script_updates = Vec::new();
+        for (type_index, stored_path) in type_script_references {
+            let source_path = resolve_stored_project_path(&source_root, &stored_path);
+            let fallback = std::path::Path::new(&stored_path)
+                .file_name()
+                .map(|name| target_scripts_dir.join(name));
+            let source = match source_path
+                .canonicalize()
+                .or_else(|_| fallback.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?.canonicalize())
+            {
+                Ok(source) => source,
+                Err(error) => {
+                    self.state.push_log(
+                        log::Level::Warn,
+                        format!("Script par défaut de type manquant `{stored_path}` : {error}"),
+                    );
+                    continue;
+                }
+            };
+            let relative = if let Ok(within_scripts) = source.strip_prefix(&target_scripts_dir) {
+                scripts_prefix.join(within_scripts)
+            } else {
+                let destination = copy_asset_to_directory(&source, &target_scripts_dir)?;
+                scripts_prefix.join(destination.file_name().unwrap_or_default())
+            };
+            type_script_updates.push((
+                type_index,
+                relative.to_string_lossy().replace('\\', "/"),
+            ));
+        }
+        for (type_index, relative) in type_script_updates {
+            self.state.project.object_types[type_index].defaults.script = Some(relative);
+        }
         let mut script_updates = Vec::new();
         for (scene_index, object_id, stored_path) in script_references {
-            let stored = std::path::Path::new(&stored_path);
-            let source_path = if stored.is_absolute() {
-                stored.to_owned()
-            } else {
-                source_root.join(stored)
-            };
+            let source_path = resolve_stored_project_path(&source_root, &stored_path);
             let source = match source_path.canonicalize() {
                 Ok(source) => source,
                 Err(error) => {
@@ -3826,8 +4240,23 @@ impl EditorApp {
             return;
         }
         let project_path = self.project_path.clone().unwrap_or(project_path);
-        let script_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../scripts/export_game.py");
+        let executable_directory = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(std::path::Path::to_path_buf));
+        let bundled_script = executable_directory
+            .as_ref()
+            .map(|directory| directory.join("scripts/export_game.py"));
+        let bundled_player = executable_directory
+            .as_ref()
+            .map(|directory| directory.join("player.exe"));
+        let is_bundled_exporter = bundled_script.as_ref().is_some_and(|path| path.is_file())
+            && bundled_player.as_ref().is_some_and(|path| path.is_file());
+        let script_path = bundled_script
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../scripts/export_game.py")
+            });
         if !script_path.is_file() {
             self.state.push_log(
                 log::Level::Error,
@@ -3848,13 +4277,33 @@ impl EditorApp {
                 output_path.display()
             ),
         );
+        let bundled_python = executable_directory
+            .as_ref()
+            .map(|directory| directory.join("python.exe"))
+            .filter(|path| path.is_file());
+        let bundled_python_home = executable_directory
+            .as_ref()
+            .map(|directory| directory.join("python-runtime"))
+            .filter(|path| path.join("Lib").is_dir());
         std::thread::spawn(move || {
-            let result = std::process::Command::new("python")
+            let mut command = std::process::Command::new(
+                bundled_python.unwrap_or_else(|| std::path::PathBuf::from("python")),
+            );
+            command
                 .arg(script_path)
                 .arg(&project_path)
                 .arg("--output")
                 .arg(&output_path)
-                .env("PYTHONIOENCODING", "utf-8")
+                .env("PYTHONIOENCODING", "utf-8");
+            if is_bundled_exporter {
+                if let Some(player) = bundled_player {
+                    command.arg("--player-bin").arg(player);
+                }
+                if let Some(python_home) = bundled_python_home {
+                    command.arg("--python-home").arg(python_home);
+                }
+            }
+            let result = command
                 .output()
                 .map_err(|error| format!("Impossible de lancer Python : {error}"))
                 .and_then(|output| {
@@ -3964,6 +4413,39 @@ impl EditorApp {
             completed.push((old.clone(), new.clone()));
         }
         Ok(())
+    }
+
+    fn resolve_runtime_audio_path(&self, stored: &str) -> Result<std::path::PathBuf, String> {
+        let project_file = self
+            .project_path
+            .as_deref()
+            .ok_or_else(|| "Le projet doit être enregistré avant de lire ses sons".to_owned())?;
+        // Asset paths copied from the browser use `/project/...` as a virtual
+        // project-root path. Strip that marker before joining on Windows, where
+        // a leading slash would otherwise root the path at the current drive.
+        let normalized = stored.replace('\\', "/");
+        let relative = normalized.strip_prefix('/').unwrap_or(&normalized);
+        let requested = std::path::Path::new(relative);
+        if relative.starts_with('/') || requested.is_absolute() {
+            return Err("Utilise un chemin relatif à la racine du projet".to_owned());
+        }
+        let project_directory = project_file
+            .parent()
+            .ok_or_else(|| "Dossier du projet introuvable".to_owned())?;
+        let project_assets_root = project_browser_directory(project_file)
+            .and_then(|path| path.canonicalize().map_err(anyhow::Error::from))
+            .map_err(|error| error.to_string())?;
+        let resolved = project_directory
+            .join(requested)
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if !resolved.starts_with(&project_assets_root) {
+            return Err("Le son doit être situé dans le dossier du projet".to_owned());
+        }
+        if !resolved.is_file() {
+            return Err("Le chemin ne désigne pas un fichier".to_owned());
+        }
+        Ok(resolved)
     }
 
     fn rename_project_path(
@@ -4585,7 +5067,7 @@ impl EditorApp {
             } else {
                 root.join(path)
             };
-            log::info!(
+            log::debug!(
                 "Chargement du script objet {} : {}",
                 object_id,
                 resolved.display()
@@ -4616,6 +5098,26 @@ impl EditorApp {
 fn canonical_project_snapshot(project: &Project) -> Option<String> {
     let value = serde_json::to_value(project).ok()?;
     serde_json::to_string(&value).ok()
+}
+
+/// Résout les chemins virtuels `/<dossier-projet>/...` enregistrés par le
+/// navigateur d'assets aussi bien que les chemins relatifs et absolus réels.
+fn resolve_stored_project_path(root: &std::path::Path, stored: &str) -> std::path::PathBuf {
+    let normalized = stored.replace('\\', "/");
+    if let Some(relative) = normalized.strip_prefix('/') {
+        let first = relative.split('/').next().unwrap_or_default();
+        let project_directory = root.join(first);
+        if project_directory.is_dir() {
+            return root.join(relative);
+        }
+    }
+
+    let path = std::path::Path::new(stored);
+    if path.is_absolute() {
+        path.to_owned()
+    } else {
+        root.join(path)
+    }
 }
 
 fn recent_asset_exists(root: &std::path::Path, stored_path: &str, extensions: &[&str]) -> bool {
@@ -5043,6 +5545,11 @@ fn copy_asset_to_directory(
 }
 
 #[cfg(target_os = "windows")]
+fn windows_dialog_was_cancelled(output: &std::process::Output) -> bool {
+    String::from_utf8_lossy(&output.stdout).trim().is_empty()
+}
+
+#[cfg(target_os = "windows")]
 fn choose_texture_file() -> anyhow::Result<Option<std::path::PathBuf>> {
     let script = r#"
 Add-Type -AssemblyName System.Windows.Forms
@@ -5068,13 +5575,13 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             &script,
         ])
         .output()?;
-    if !output.status.success() {
+    if !output.status.success() && !windows_dialog_was_cancelled(&output) {
         anyhow::bail!(
             "Le sélecteur de texture Windows a échoué : {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let selected = String::from_utf8(output.stdout)?;
+    let selected = String::from_utf8_lossy(&output.stdout).into_owned();
     let selected = selected.trim();
     if selected.is_empty() {
         Ok(None)
@@ -5108,13 +5615,13 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             script,
         ])
         .output()?;
-    if !output.status.success() {
+    if !output.status.success() && !windows_dialog_was_cancelled(&output) {
         anyhow::bail!(
             "Le sélecteur de texture Windows a échoué : {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let selected = String::from_utf8(output.stdout)?;
+    let selected = String::from_utf8_lossy(&output.stdout).into_owned();
     let selected = selected.trim();
     if selected.is_empty() {
         Ok(None)
@@ -5153,13 +5660,13 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             script,
         ])
         .output()?;
-    if !output.status.success() {
+    if !output.status.success() && !windows_dialog_was_cancelled(&output) {
         anyhow::bail!(
             "Le sélecteur de média Windows a échoué : {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let selected = String::from_utf8(output.stdout)?;
+    let selected = String::from_utf8_lossy(&output.stdout).into_owned();
     let selected = selected.trim();
     if selected.is_empty() {
         Ok(None)
@@ -5198,13 +5705,13 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             script,
         ])
         .output()?;
-    if !output.status.success() {
+    if !output.status.success() && !windows_dialog_was_cancelled(&output) {
         anyhow::bail!(
             "Le sélecteur audio Windows a échoué : {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let selected = String::from_utf8(output.stdout)?;
+    let selected = String::from_utf8_lossy(&output.stdout).into_owned();
     let selected = selected.trim();
     if selected.is_empty() {
         Ok(None)
@@ -5248,13 +5755,13 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             &script,
         ])
         .output()?;
-    if !output.status.success() {
+    if !output.status.success() && !windows_dialog_was_cancelled(&output) {
         anyhow::bail!(
             "Le sélecteur de script Windows a échoué : {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let selected = String::from_utf8(output.stdout)?;
+    let selected = String::from_utf8_lossy(&output.stdout).into_owned();
     let selected = selected.trim();
     if selected.is_empty() {
         Ok(None)
@@ -5296,13 +5803,13 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             &script,
         ])
         .output()?;
-    if !output.status.success() {
+    if !output.status.success() && !windows_dialog_was_cancelled(&output) {
         anyhow::bail!(
             "Le dialogue de création Windows a échoué : {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let selected = String::from_utf8(output.stdout)?;
+    let selected = String::from_utf8_lossy(&output.stdout).into_owned();
     let selected = selected.trim();
     if selected.is_empty() {
         Ok(None)
@@ -5360,13 +5867,13 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             script,
         ])
         .output()?;
-    if !output.status.success() {
+    if !output.status.success() && !windows_dialog_was_cancelled(&output) {
         anyhow::bail!(
             "Le sélecteur de fichiers Windows a échoué : {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let selected = String::from_utf8(output.stdout)?;
+    let selected = String::from_utf8_lossy(&output.stdout).into_owned();
     let selected = selected.trim();
     if selected.is_empty() {
         Ok(None)
@@ -5408,13 +5915,13 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
             &script,
         ])
         .output()?;
-    if !output.status.success() {
+    if !output.status.success() && !windows_dialog_was_cancelled(&output) {
         anyhow::bail!(
             "Le sélecteur d'export Windows a échoué : {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let selected = String::from_utf8(output.stdout)?;
+    let selected = String::from_utf8_lossy(&output.stdout).into_owned();
     let selected = selected.trim();
     if selected.is_empty() {
         Ok(None)

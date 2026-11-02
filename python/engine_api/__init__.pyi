@@ -89,6 +89,7 @@ class GameObject:
     has_collisions: bool
     hidden: bool
     fit_texture_to_diamond: bool
+    isometric_depth: bool
     camera_zoom: float
     camera_interpolation: bool
     camera_interpolation_speed: float
@@ -137,6 +138,39 @@ class UIAnchorSet:
 
 
 class GameUI:
+    def set_button(
+        self,
+        id: str,
+        label: str,
+        x: float = 0.0,
+        y: float = 0.0,
+        width: float = 180.0,
+        height: float = 42.0,
+        anchor: UIAnchor | None = None,
+        visibility: bool = True,
+    ) -> None:
+        """Create a HUD button; clicks call _on_ui_button(game, id)."""
+        ...
+
+    def remove_button(self, id: str) -> None: ...
+
+    def set_slider(
+        self,
+        id: str,
+        label: str,
+        x: float = 0.0,
+        y: float = 0.0,
+        width: float = 240.0,
+        value: float = 1.0,
+        minimum: float = 0.0,
+        maximum: float = 1.0,
+        anchor: UIAnchor | None = None,
+    ) -> None:
+        """Create a HUD slider; changes call _on_ui_slider(game, id, value)."""
+        ...
+
+    def remove_slider(self, id: str) -> None: ...
+
     def set_text(
         self,
         id: str,
@@ -157,6 +191,9 @@ class GameUI:
     def update_anchor(self, id: str, anchor: UIAnchor) -> None: ...
     def update_font_size(self, id: str, font_size: float) -> None: ...
     def update_color(self, id: str, color: tuple[int, int, int, int]) -> None: ...
+    def update_visibility(self, id: str, visible: bool) -> None:
+        """Show or hide an existing HUD text or button."""
+        ...
     def fade_out(self, id: str, duration: float) -> None:
         """Fait disparaître le texte progressivement puis le supprime."""
         ...
@@ -166,6 +203,39 @@ class GameUI:
 
     def remove_text(self, id: str) -> None:
         """Supprime un texte HUD."""
+        ...
+
+
+class GameAudio:
+    """Lecture et contrôle des sons pendant le mode Lecture."""
+
+    def create(self, id: str, path: str) -> None:
+        """Register a project audio source under an identifier."""
+        ...
+
+    def play(self, id: str, volume: float = 1.0, looping: bool = False) -> str:
+        """Play a created source and return its identifier."""
+        ...
+
+    def stop(self, id: str) -> None:
+        """Arrête un son lancé par play."""
+        ...
+
+    def set_volume(self, id: str, volume: float) -> None:
+        """Change le volume d'un son lancé par play."""
+        ...
+
+    def get_volume(self, id: str) -> float | None:
+        """Renvoie le dernier volume demandé, ou None avant play/set_volume."""
+        ...
+
+
+    def pause(self) -> None:
+        """Pause all game sounds without stopping them."""
+        ...
+
+    def resume(self) -> None:
+        """Resume sounds paused with pause()."""
         ...
 
 
@@ -181,9 +251,26 @@ class GameContext:
         """Temps écoulé depuis le dernier frame, en secondes."""
         ...
 
+    def pause(self) -> None:
+        """Met la simulation en pause tout en gardant le HUD interactif."""
+        ...
+
+    def resume(self) -> None:
+        """Reprend une simulation en pause."""
+        ...
+
+    def stop(self) -> None:
+        """Stops playback and returns to the editor."""
+        ...
+
     @property
     def ui(self) -> GameUI:
         """API des textes HUD du jeu."""
+        ...
+
+    @property
+    def audio(self) -> GameAudio:
+        """API de lecture et de contrôle des sons du jeu."""
         ...
 
     @property
@@ -220,6 +307,12 @@ class GameContext:
     def fit_texture_to_diamond(self) -> bool:
         """Indique si la texture est ajustée au losange."""
         ...
+
+    @property
+    def isometric_depth(self) -> bool:
+        """Indique si le sprite est incliné en parallélogramme selon la grille."""
+        ...
+
 
     @property
     def rotation(self) -> str:
